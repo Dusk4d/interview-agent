@@ -59,6 +59,10 @@ powershell -File scripts\build-dist.ps1     :: 组装 dist/
 
 > 本机没有外网，Maven 依赖已镜像到 `.m2repo/`，构建脚本全部使用 `mvn -o`（离线）。
 > 有网环境可以去掉 `-s .m2settings.xml -o`，走标准 `~/.m2` 仓库。
+>
+> 换机器时如果 `.m2repo/` 不在（已 gitignore，约 408MB），两种办法：
+> 1) 有外网：直接用 `mvn clean test`（去掉离线参数），依赖会被自动下载；
+> 2) 无外网：从已有缓存复制一份 `robocopy %USERPROFILE%\.m2\repository .m2repo /E`。
 
 ---
 

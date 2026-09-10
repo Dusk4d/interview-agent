@@ -11,6 +11,7 @@ import com.dusk4d.interview.storage.InterviewRepository;
 import com.dusk4d.interview.storage.JsonFileStore;
 import com.dusk4d.interview.storage.MapBackedInterviewRepository;
 import com.dusk4d.interview.storage.Store;
+import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +20,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.List;
 import java.util.function.Function;
 
 /**
@@ -66,7 +68,10 @@ public class StorageConfiguration {
         if (mode == StorageMode.MEMORY) {
             return new InMemoryStore<>(idExtractor, order);
         }
-        return new JsonFileStore<>(dataDir().resolve(fileName), type, objectMapper, idExtractor, order);
+        // 必须用具体 JavaType：Spring 的 ObjectMapper 能序列化 record，
+        // 但读回 List<T> 时必须显式给出元素类型，否则会得到 List<LinkedHashMap>。
+        JavaType listType = objectMapper.getTypeFactory().constructCollectionType(List.class, type);
+        return new JsonFileStore<>(dataDir().resolve(fileName), listType, objectMapper, idExtractor, order);
     }
 
     /** 数据目录：优先 INTERVIEW_DATA_DIR / app.storage.data-dir，其次 <app.home>/data。 */

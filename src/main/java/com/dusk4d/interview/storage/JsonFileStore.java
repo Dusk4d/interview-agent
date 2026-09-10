@@ -1,6 +1,6 @@
 package com.dusk4d.interview.storage;
 
-import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +22,11 @@ import java.util.Map;
  * 数据量级是「个人练习记录」（几十份简历、几百场会话），全量写回完全够用，
  * 换来的是零依赖、可备份、可直接阅读的数据文件。
  *
+ * <p><b>实现注意（曾经踩过的坑）</b>：这里必须使用调用方传入的具体 {@link JavaType}，
+ * 不能用匿名 {@code TypeReference<List<T>>}。后者在构造器里创建时 {@code T} 仍是类型变量，
+ * 运行时被解析成 {@code List<Object>}，读回来是一堆 {@code LinkedHashMap}，
+ * 随后在强转时抛 ClassCastException，表现为「每次重启数据都被判定为损坏」。
+ *
  * <p>隐私：文件只写清洗并脱敏后的文本，原始简历文件与联系方式不落盘。
  */
 public class JsonFileStore<T> extends InMemoryStore<T> {
@@ -30,15 +35,14 @@ public class JsonFileStore<T> extends InMemoryStore<T> {
 
     private final Path file;
     private final ObjectMapper objectMapper;
-    private final TypeReference<List<T>> typeRef;
+    private final JavaType listType;
 
-    public JsonFileStore(Path file, Class<T> type, ObjectMapper objectMapper,
+    public JsonFileStore(Path file, JavaType listType, ObjectMapper objectMapper,
                          java.util.function.Function<T, String> idExtractor, Comparator<T> order) {
         super(idExtractor, order);
         this.file = file;
+        this.listType = listType;
         this.objectMapper = objectMapper;
-        this.typeRef = new TypeReference<>() {
-        };
         load();
     }
 
@@ -78,11 +82,11 @@ public class JsonFileStore<T> extends InMemoryStore<T> {
             if (json.isBlank()) {
                 return;
             }
-            List<T> entities = objectMapper.readValue(json, typeRef);
+            List<T> entities = objectMapper.readValue(json, listType);
             loadAll(entities);
             log.info("已从 {} 载入 {} 条记录", file.getFileName(), count());
         } catch (IOException | RuntimeException e) {
-            // 数据文件损坏不应导致应用无法启动：保留现场并改名，从空集合继续
+            // 数据文件确实损坏时不应阻止启动：保留现场并改名，从空集合继续
             log.warn("数据文件读取失败（将忽略并重建）：{} - {}", file, e.getMessage());
             quarantine();
         }

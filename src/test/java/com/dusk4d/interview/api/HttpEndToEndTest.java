@@ -276,7 +276,7 @@ class HttpEndToEndTest {
         ResponseEntity<String> noRoute = rest.getForEntity(url("/api/not-a-real-endpoint"), String.class);
         assertThat(noRoute.getStatusCode().value()).isEqualTo(404);
 
-        // 上传空文件：400
+        // 上传空文件：4xx
         HttpHeaders multipart = new HttpHeaders();
         multipart.setContentType(MediaType.MULTIPART_FORM_DATA);
         ByteArrayResource empty = new ByteArrayResource(new byte[0]) {
@@ -290,6 +290,61 @@ class HttpEndToEndTest {
         ResponseEntity<String> emptyUpload = rest.postForEntity(url("/api/resumes/import"),
                 new HttpEntity<>(form, multipart), String.class);
         assertThat(emptyUpload.getStatusCode().is4xxClientError()).isTrue();
+
+        // 纯符号内容：清洗后无可用文本 → 422 且给出原因
+        ResponseEntity<String> noise = rest.postForEntity(url("/api/resumes/text"),
+                Map.of("text", "★☆★☆ ※※※※ ◆◆◆◆ ○○○○ △△△△ □□□□"),
+                String.class);
+        assertThat(noise.getStatusCode().value()).isEqualTo(422);
+        assertThat(json(noise).path("code").asText()).isEqualTo("EMPTY_RESUME_TEXT");
+
+        // 不存在的简历：404
+        ResponseEntity<String> badResume = rest.getForEntity(url("/api/resumes/not-a-resume"), String.class);
+        assertThat(badResume.getStatusCode().value()).isEqualTo(404);
+
+        // 字段类型错误：400 而不是 500
+        HttpHeaders headers2 = new HttpHeaders();
+        headers2.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<String> wrongType = rest.postForEntity(url("/api/interviews"),
+                new HttpEntity<>("{\"mode\":\"PROJECT\",\"maxQuestions\":\"abc\"}", headers2), String.class);
+        assertThat(wrongType.getStatusCode().value()).isEqualTo(400);
+        assertThat(json(wrongType).path("code").asText()).isEqualTo("INVALID_REQUEST_BODY");
+    }
+
+    @Test
+    @Order(9)
+    @DisplayName("边界：单题会话达到上限后自动结束；纯符号文本导入被拒绝")
+    void singleQuestionBudget() throws Exception {
+        String resumeId = uploadStandardResume();
+        ResponseEntity<String> created = rest.postForEntity(url("/api/interviews"),
+                Map.of("resumeId", resumeId, "mode", "PROJECT", "maxQuestions", 1), String.class);
+        String sessionId = json(created).path("id").asText();
+
+        ResponseEntity<String> question = rest.postForEntity(
+                url("/api/interviews/" + sessionId + "/next-question"), null, String.class);
+        String questionId = json(question).path("id").asText();
+        rest.postForEntity(url("/api/interviews/" + sessionId + "/answers"),
+                Map.of("questionId", questionId,
+                        "content", "我负责检索链路，使用向量检索与关键词召回融合，结果响应时间降到 1.8 秒。"),
+                String.class);
+
+        // 上限为 1，再次请求出题应返回 409 且会话已自动结束
+        ResponseEntity<String> exceeded = rest.postForEntity(
+                url("/api/interviews/" + sessionId + "/next-question"), null, String.class);
+        assertThat(exceeded.getStatusCode().value()).isEqualTo(409);
+        assertThat(json(exceeded).path("code").asText()).isEqualTo("INVALID_SESSION_STATE");
+
+        ResponseEntity<String> session = rest.getForEntity(url("/api/interviews/" + sessionId), String.class);
+        assertThat(json(session).path("status").asText()).isEqualTo("FINISHED");
+        // 上限为 1，因此只下发了 1 道题（达到上限时不会再多出一题）
+        assertThat(json(session).path("questionCount").asInt()).isEqualTo(1);
+        assertThat(json(session).path("answerCount").asInt()).isEqualTo(1);
+
+        // 仍可生成报告
+        ResponseEntity<String> report = rest.postForEntity(
+                url("/api/interviews/" + sessionId + "/report"), null, String.class);
+        assertThat(report.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(json(report).path("report").path("answerCount").asInt()).isGreaterThan(0);
     }
 
     @Test
