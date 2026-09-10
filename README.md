@@ -301,7 +301,24 @@ docker compose --profile ollama up -d --build
 
 ---
 
-## 九、面试汇报要点与代码证据
+## 九、发布到 GitHub（需联网环境执行）
+
+开发机没有外网，因此仓库已在本地准备好（3 个提交在 `main` 分支），但未能推送。到有网络的环境执行：
+
+```bat
+:: 方式一：已登录 GitHub CLI（推荐）
+gh auth login
+scripts\publish-github.cmd
+
+:: 方式二：手工推送
+git remote add origin https://github.com/Dusk4d/interview-agent.git
+git push -u origin main
+```
+
+> 仓库体积约 22MB（不含 `.m2repo/` 离线依赖镜像，已被 `.gitignore` 排除）。
+> 首次推送前建议确认 `git status` 干净，且不要提交 `dist/`、`data/`、`target/`。
+
+## 十、面试汇报要点与代码证据
 
 | 面试常问 | 一句话回答 | 代码证据 |
 |---|---|---|
@@ -316,7 +333,7 @@ docker compose --profile ollama up -d --build
 
 ---
 
-## 十、目录结构
+## 十一、目录结构
 
 ```text
 interview-agent/
@@ -324,7 +341,13 @@ interview-agent/
 ├── README.md                   本文
 ├── docs/                       设计、接口、验证、面试讲解文档
 ├── deploy/                     Dockerfile + docker-compose + 部署说明
-├── scripts/                    构建/测试/打包/冒烟脚本（离线）
+├── scripts/                    构建/测试/打包/冒烟/发布脚本（离线）
+│   ├── mvn.cmd                 离线 Maven 包装（-o + 项目本地仓库）
+│   ├── resolve-classpath.ps1   离线类路径解析（含版本锁定）
+│   ├── run-tests.ps1           编译 + 运行全部测试
+│   ├── build-dist.ps1          组装 dist/（app.jar + lib/ + 启动脚本）
+│   ├── smoke-test.cmd/.ps1     对运行中实例做 HTTP 冒烟验收
+│   └── publish-github.cmd      推送到 GitHub（需联网）
 ├── src/main/java/...           后端源码（见上文分层）
 ├── src/main/resources/
 │   ├── application.properties  配置
@@ -335,7 +358,7 @@ interview-agent/
 
 ---
 
-## 十一、已知限制与下一步
+## 十二、已知限制与下一步
 
 * **无语音**：文本陪练，不含语音识别/合成与视频分析。
 * **无 OCR**：图片型/扫描版 PDF 会明确提示不支持，而不是产出虚假结构。
