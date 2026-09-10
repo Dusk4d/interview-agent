@@ -4,7 +4,7 @@
 
 这个项目的重点不是「调用一次大模型」，而是把**简历事实、检索、问题生成、面试状态、回答评估、学习报告**组织成一条可重复使用、可测试、可解释的流程。
 
-> 当前状态：**MVP 全部功能已完成，自动化测试全绿（100 项，含真实 HTTP 端到端与打包后进程级冒烟）**。
+> 当前状态：**MVP 全部功能已完成，自动化测试全绿（127 项，含真实 HTTP 端到端、MVP 总验收与打包后进程级冒烟）**。
 > 文中所有量化结论都标注了来源（测试用例或脚本）；未实测的指标一律写「待测」，不做没有证据的宣称。
 
 ---
@@ -215,7 +215,7 @@ EVALUATING -> FINISHED -> REPORT_READY
 
 ## 六、测试与验证
 
-### 自动化测试（100 项，全部通过）
+### 自动化测试（127 项，全部通过）
 
 ```bat
 powershell -File scripts\run-tests.ps1
@@ -232,7 +232,13 @@ powershell -File scripts\run-tests.ps1
 | `InterviewStateMachineTest` | 7 | 全流程转移、终态封闭、非法转移拒绝、提示文案 |
 | `HeuristicEvaluatorTest` | 7 | 空/答非所问/详细回答的排序、降级上限、报告统计 |
 | `InterviewFlowTest` | 10 | 服务层端到端闭环 + 重复提交/空回答/越界/追问上限/人工修正 |
-| `HttpEndToEndTest` | 8 | **真实 HTTP + 内嵌 Tomcat**：multipart 上传、静态资源、全链路、错误码、检索调试 |
+| `HttpEndToEndTest` | 9 | **真实 HTTP + 内嵌 Tomcat**：multipart 上传、静态资源、全链路、错误码、检索调试、题目上限自动结束 |
+| `JsonFileStoreTest` | 4 | 写盘后重新打开仓储（模拟重启）读回简历/会话/评分/报告；损坏文件隔离 |
+| `VectorIndexInitializerTest` | 4 | 启动期索引重建、幂等、空库跳过、空事实跳过 |
+| `MultiResumeRegressionTest` | 4 | 4 份不同结构简历批量解析不丢字段、结果可复现、极简简历不编造 |
+| `MvpAcceptanceTest` | 14 | **方案书第九节验收标准逐条对应**：全格式导入、事实修正、双模式出题、评分可解释、追问不串题、报告生成、四类失败路径、隐私、跨重启恢复，以及全部反面场景 |
+
+合计 **127 项**。其中 `MvpAcceptanceTest` 是「一套跑完即可判断系统是否达标」的门禁测试。
 
 ### 进程级冒烟验收（打包后真实运行）
 
@@ -248,7 +254,7 @@ scripts\smoke-test.cmd
 
 | 项目 | 数值 | 来源 |
 |---|---|---|
-| 自动化测试用例 | 100 项，失败 0 | `scripts\run-tests.ps1` |
+| 自动化测试用例 | 127 项，失败 0 | `scripts\run-tests.ps1` |
 | 打包体积 | `dist/` ≈ 23.9 MB（43 个依赖 jar） | `scripts\build-dist.ps1` |
 | 应用启动耗时 | ≈ 3.0 秒（空库，Mock 模型） | `dist/run-out.log` |
 | 知识库种子 | 31 条，8 个主题 | `GET /api/health` |
@@ -304,7 +310,7 @@ docker compose --profile ollama up -d --build
 | 评分为什么可信？ | 固定 Rubric + 结构化输出 + 分项依据 + 降级时压低上限并标注 | `agent/AnswerEvaluator.java`、`agent/HeuristicEvaluator.java` |
 | 模型挂了怎么办？ | 连接/超时/非法 JSON/空回答四类分别有明确降级路径，不抛 500 | `error/LlmException.java`、`api/ApiExceptionHandler.java` |
 | 简历隐私怎么处理？ | 脱敏在解析后立即执行，联系方式不进上下文，日志不写原文 | `privacy/PrivacyMasker.java`、`HttpEndToEndTest#uploadResumeViaMultipart` |
-| 怎么验证质量？ | 100 项自动化测试 + 打包后进程级冒烟；评测集与量化待补 | `src/test/java/**`、`scripts/smoke-test.cmd` |
+| 怎么验证质量？ | 127 项自动化测试 + 打包后进程级冒烟；评测集与量化待补 | `src/test/java/**`、`scripts/smoke-test.cmd` |
 
 更多设计与取舍见 `docs/DESIGN.md`，接口细节见 `docs/API.md`，验证步骤见 `docs/VERIFICATION.md`。
 
@@ -324,7 +330,7 @@ interview-agent/
 │   ├── application.properties  配置
 │   ├── knowledge/knowledge-base.json  八股知识库种子（31 条）
 │   └── static/                 前端（index.html / styles.css / app.js，零依赖）
-└── src/test/java/...           100 项自动化测试 + 测试工具
+└── src/test/java/...           127 项自动化测试 + 测试工具
 ```
 
 ---

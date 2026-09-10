@@ -540,6 +540,14 @@ public class InterviewService {
                 pick.projectName());
     }
 
+    /**
+     * 检索为空时的兜底：直接用简历事实原文构造上下文。
+     *
+     * <p>关键点：兜底路径同样要产出 {@link com.dusk4d.interview.rag.ScoredChunk}，
+     * 而不是只拼一段文本——否则 {@code sourceIds} 会是空的，问题就失去了溯源信息
+     * （前端无法核对「这条依据来自哪段简历」）。这是一个曾经出现过的缺陷，已在
+     * {@code acceptance7_failurePaths} 中加了回归断言。
+     */
     private DocumentRetriever.RetrievalResult fallbackContextFromFacts(Resume resume, TopicPick pick) {
         List<ResumeFact> facts;
         if (pick.projectName() != null) {
@@ -558,10 +566,10 @@ public class InterviewService {
         if (facts.isEmpty()) {
             return DocumentRetriever.RetrievalResult.none();
         }
-        StringBuilder context = new StringBuilder();
-        List<String> ids = new ArrayList<>();
-        List<String> citations = new ArrayList<>();
+
         int limit = properties.retrieval().maxContextChars();
+        List<com.dusk4d.interview.rag.ScoredChunk> chunks = new ArrayList<>();
+        StringBuilder context = new StringBuilder();
         int index = 1;
         for (ResumeFact fact : facts) {
             String block = "[" + index + "] 简历片段：" + fact.label() + "\n" + fact.content() + "\n";
@@ -569,14 +577,18 @@ public class InterviewService {
                 break;
             }
             context.append(block);
-            ids.add(fact.id());
-            citations.add("简历片段：" + fact.label());
+            com.dusk4d.interview.rag.TextChunk chunk = com.dusk4d.interview.rag.TextChunk.resumeFact(
+                    fact.id(), resume.id(), fact.type(), fact.label(),
+                    fact.type() == FactType.PROJECT ? fact.label() : null,
+                    fact.content(), fact.sourceOrder(), fact.metadata());
+            chunks.add(new com.dusk4d.interview.rag.ScoredChunk(chunk, 0d, index, 0, 0d));
             index++;
         }
-        if (context.isEmpty()) {
+        if (chunks.isEmpty()) {
             return DocumentRetriever.RetrievalResult.none();
         }
-        return new DocumentRetriever.RetrievalResult(List.of(), citations, context.toString().strip(), false);
+        List<String> citations = chunks.stream().map(com.dusk4d.interview.rag.ScoredChunk::citation).toList();
+        return new DocumentRetriever.RetrievalResult(chunks, citations, context.toString().strip(), false);
     }
 
     private boolean isFundamentalsOrIntro(InterviewStage stage) {

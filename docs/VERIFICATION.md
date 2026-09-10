@@ -2,7 +2,7 @@
 
 本文说明「怎么证明系统能用」，以及哪些结论已经实测、哪些仍然待测。
 
-## 一、自动化测试（100 项）
+## 一、自动化测试（127 项）
 
 ```bat
 powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
@@ -28,7 +28,29 @@ powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
 | 状态机 | `InterviewStateMachineTest` | 7 | 全流程合法、终态封闭（11×11）、非法转移提示、出题/答题守卫 |
 | 评分与报告 | `HeuristicEvaluatorTest` | 7 | 空/答非所问/详细回答的分数排序、降级上限、雷达样本量、最弱题与知识缺口 |
 | 服务层端到端 | `InterviewFlowTest` | 10 | 项目面全闭环、八股面无简历、完整模拟阶段推进、重复提交、空/超短回答、越界、追问上限、人工修正 |
-| HTTP 端到端 | `HttpEndToEndTest` | 8 | 真实 Tomcat + multipart 上传、静态资源、全链路（含报告下载）、错误码 400/404/409、检索调试接口 |
+| HTTP 端到端 | `HttpEndToEndTest` | 9 | 真实 Tomcat + multipart 上传、静态资源、全链路（含报告下载）、错误码 400/404/409/422、检索调试、题目上限自动结束 |
+| 持久化 | `JsonFileStoreTest` | 4 | 写盘后重新打开仓储（模拟重启）读回简历/会话/问题/回答/评分/报告；损坏文件隔离后仍可写入 |
+| 启动索引 | `VectorIndexInitializerTest` | 4 | 启动期从持久化简历重建检索索引；幂等；空库与空事实跳过 |
+| 多简历回归 | `MultiResumeRegressionTest` | 4 | 4 份不同结构简历批量解析不丢字段、结果可复现、极简简历不编造内容 |
+| **MVP 总验收** | `MvpAcceptanceTest` | 14 | 方案书第九节验收标准逐条对应，含全部反面场景（脱离简历、串题、模型失败无提示、隐私泄露、解析失败隐瞒） |
+
+### 验收标准对照（`MvpAcceptanceTest`）
+
+| 方案书验收项 | 对应测试方法 | 断言要点 |
+|---|---|---|
+| 支持一种文件格式 + 一种文本兜底 | `acceptance1_importAllFormats` | TXT/DOCX/PDF 三种 + 粘贴文本均可解析；英文 PDF 无中文区块标题时状态为 NEEDS_REVIEW 并提示 |
+| 展示解析结果 + 人工修正 | `acceptance2_reviewAndCorrectFacts` | 修正后事实与检索索引同步更新，检索上下文包含修正内容 |
+| 项目面 / 八股面两种模式 | `acceptance3_twoModes` | 项目面来源全部为 `resume-*`、引用为「简历片段」；八股面来源为 `knowledge-*`、引用为「知识点」 |
+| 出题、回答、评分、纠错 | `acceptance4_questionAnswerEvaluate` | 四维分数均有依据；评分可反查到 answerId；参考结构非空 |
+| 追问或换题 | `acceptance5_followUpAndNextQuestion` | 追问带 `parentQuestionId`，换题不带上一题上下文、序号连续 |
+| 结束并生成文字复盘 | `acceptance6_finishAndReport` | 报告含雷达、最弱题、知识缺口、行动建议与 Markdown 七个章节 |
+| 空回答 / 模型超时 / 非法 JSON / 检索为空 | `acceptance7_failurePaths` | 四类失败各自有明确结果与标注；检索为空时回退到事实原文且**保留 sourceIds** |
+| 隐私 | `acceptance8_privacy` | 入库文本、事实内容、检索上下文、出题内容均无手机号/邮箱 |
+| 跨重启恢复 | `acceptance9_persistenceAcrossRestart` | 重启后数据完整、报告可读、检索索引已重建、无 `.corrupt` |
+| 反面：问题脱离简历 | `noQuestionWithoutResumeEvidence` | 每题 sourceIds 必须属于该简历的事实 |
+| 反面：串题 / 重复提交 | `noCrossQuestionContamination` | 重复提交 409；追问只针对当前题；终态不可继续 |
+| 反面：模型失败后页面一直等待 | `noInfiniteWaitingOnModelFailure` | 降级立即返回且字段完整 |
+| 反面：解析失败隐瞒 | `parseFailuresAreExplicit` | 图片 PDF / 旧版 doc / 空文件 / 纯符号各自给出明确原因 |
 
 ### 异常与边界场景清单（均有测试）
 
@@ -61,7 +83,34 @@ score=2.5 nextAction=FOLLOW_UP   （故意提交不完整回答）
 knowledgeItems=31 chunks=31
 ```
 
-## 三、手工验证路径（面试演示顺序）
+同一冒烟脚本在**模型不可达**的实例上也全部通过（见第四节），证明降级路径是完整的闭环。
+
+## 三、重启持久化与索引重建（真实进程实测）
+
+| 步骤 | 结果 |
+|---|---|
+| 启动 → 导入简历 → 出题 → 回答（4.0 分）→ 结束 → 生成报告 | 6 个数据文件写入 `dist/data/` |
+| 杀掉进程并重启 | 6 个文件全部载入：`已从 resumes.json 载入 1 条记录` … `已从 reports.json 载入 1 条记录` |
+| 检查是否误判损坏 | `*.corrupt` 文件数 = **0** |
+| 重启后检索 | 返回 3 个片段 + 3 条来源引用（启动期 `VectorIndexInitializer` 重建了 5 个简历片段） |
+| 重启后读取历史报告 | 同一 session 的报告可读，`overallScore=4.0`，Markdown 长度 2532 |
+
+> 这两个问题（持久化读回失败、向量索引不重建）是在本轮回测中发现的真实缺陷，
+> 修复后已补上 `JsonFileStoreTest` 与 `VectorIndexInitializerTest` 做回归防护。
+
+## 四、模型不可用时的降级实测
+
+用 `-Dapp.llm.base-url=http://127.0.0.1:59999/v1`（不可达端口）启动实例：
+
+| 检查项 | 结果 |
+|---|---|
+| `/api/health` | `status=UP`，`llmAvailable=false`，`llmProvider=openai-compatible` |
+| 出题 | 239ms 内返回，`degraded=true`，原因：「模型服务未连接，已使用模板出题…」 |
+| 评分 | `degraded=true`，四个维度齐全，总分 2.25（启发式上限 3.5），总评明确标注降级原因 |
+| 完整冒烟（26 项） | 全部通过（导入 → 出题 → 回答 → 追问 → 报告 → 下载） |
+| 是否需要等待超时 | 不需要：连接失败在 `connect-timeout-ms`（700ms）内返回，不阻塞页面 |
+
+## 五、手工验证路径（面试演示顺序）
 
 1. `dist\app.cmd` 启动 → 打开 `http://127.0.0.1:8090/index.html`
 2. 「① 简历导入」点「载入示例简历」→「解析粘贴内容」→ 展示事实/项目/技术栈，并指出联系方式已被脱敏
@@ -73,18 +122,18 @@ knowledgeItems=31 chunks=31
 7. 「③ 完整模拟面试」→ 展示阶段推进条（自我介绍→项目→深挖→基础→反问→总结）
 8. 结束 → 「④ 复盘报告」→ 能力雷达、最弱题、知识缺口、项目风险、行动建议 → 下载 Markdown
 
-## 四、已实测的量化数据（可复现）
+## 六、已实测的量化数据（可复现）
 
 | 指标 | 数值 | 复现方式 |
 |---|---|---|
-| 自动化测试 | 100 项全通过，0 失败 | `scripts\run-tests.ps1` |
+| 自动化测试 | 127 项全通过，0 失败 | `scripts\run-tests.ps1` |
 | 打包产物 | `dist/` ≈ 23.9 MB，43 个依赖 jar | `scripts\build-dist.ps1` |
 | 启动耗时 | ≈ 3.0 秒（空库 + Mock 模型） | `dist/run-out.log` 中 `Started Bootstrap in 2.966 seconds` |
 | 知识库 | 31 条 / 8 主题 | `GET /api/health` |
 | 示例简历解析 | 6 条事实、1 个项目、14 项技术栈 | `scripts\smoke-test.cmd` 输出 |
 | 单份简历向量化规模 | 几十个片段（暴力检索无压力） | `GET /api/health` 的 `knownChunks` |
 
-## 五、待测指标（**不要写进简历当作结论**）
+## 七、待测指标（**不要写进简历当作结论**）
 
 | 指标 | 需要的样本与方法 | 现状 |
 |---|---|---|
@@ -100,7 +149,7 @@ knowledgeItems=31 chunks=31
 （`resume-XX.txt` + `expected-facts.json` + `approved-questions.txt` + `answers/*.txt`），
 评测脚本可复用 `TestRunner` 直接跑批量断言。
 
-## 六、已知问题与限制
+## 八、已知问题与限制
 
 1. 默认哈希向量不是语义模型：同义改写召回依赖关键词召回兜底，接远端 embedding 效果更好。
 2. 评分存在模型主观性：已用固定 Rubric + 结构化输出降低漂移，但未做方差量化。
