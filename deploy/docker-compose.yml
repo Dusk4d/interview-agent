@@ -1,0 +1,46 @@
+# 使用说明见 deploy/README.md
+#
+# 两种常见用法：
+#   1) 只起应用（模型服务跑在宿主机上，用 host.docker.internal 访问）
+#        docker compose up -d --build
+#   2) 连同一个 Ollama 一起起（拉取模型后由应用调用）
+#        docker compose --profile ollama up -d --build
+
+services:
+  interview-agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        # 本机无外网时保持 true：使用仓库内的 .m2repo 离线构建
+        OFFLINE: "true"
+    image: interview-agent:0.1.0
+    container_name: interview-agent
+    ports:
+      - "8090:8090"
+    environment:
+      # 默认指向宿主机上的 LM Studio / Ollama；在 Linux 上把 host.docker.internal 换成 172.17.0.1
+      INTERVIEW_LLM_BASE_URL: ${INTERVIEW_LLM_BASE_URL:-http://host.docker.internal:1234/v1}
+      INTERVIEW_LLM_CHAT_MODEL: ${INTERVIEW_LLM_CHAT_MODEL:-qwen2.5-7b-instruct}
+      INTERVIEW_LLM_EMBEDDING_MODEL: ${INTERVIEW_LLM_EMBEDDING_MODEL:-text-embedding-nomic-embed-text-v1.5}
+      # 没有本地模型时可设 mock，系统会用降级策略完整跑通
+      INTERVIEW_LLM_PROVIDER: ${INTERVIEW_LLM_PROVIDER:-local}
+      INTERVIEW_EMBEDDING_MODE: ${INTERVIEW_EMBEDDING_MODE:-local}
+      INTERVIEW_STORAGE_MODE: file
+      INTERVIEW_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # 可选的本地模型服务：docker compose --profile ollama up -d --build
+  ollama:
+    image: ollama/ollama:latest
+    container_name: interview-ollama
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama:/root/.ollama
+    restart: unless-stopped

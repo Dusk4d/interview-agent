@@ -1,0 +1,38 @@
+张伟
+手机：13812345678  邮箱：zhangwei_dev@example.com  现居地址：北京市海淀区中关村大街 27 号
+求职意向：Java 后端开发 / AI 应用开发
+
+教育经历
+2021.09 - 2025.06  北京邮电大学  计算机科学与技术  本科
+主修课程：数据结构、操作系统、计算机网络、数据库原理
+GPA 3.7/4.0，专业排名前 10%
+
+实习经历
+2024.06 - 2024.12  杭州云启科技有限公司  Java 后端开发实习生
+参与订单中心重构，负责优惠券核销链路，使用 Redis 分布式锁保证并发下单幂等
+使用 Kafka 异步解耦通知模块，将下单接口 P99 从 800ms 降到 210ms
+
+项目经历
+2023.09 - 2024.05  FinanceAgent 智能财务问答系统  主要开发
+项目背景：面向中小企业的财务数据问答平台，需要把自然语言问题转成可执行查询
+技术栈：Java 21、Spring Boot 3、PostgreSQL、pgvector、Vue3、通义千问
+个人职责：负责文档解析与检索链路，设计分段与元数据方案，实现向量检索与重排
+难点：财务报表 PDF 结构差异大，采用按标题分级切分并保留来源引用，召回准确率明显提升
+结果：支持 12 类财务问题，平均响应 1.8 秒，上线后每周内部使用约 300 次
+
+2023.03 - 2023.08  云中摄影社区平台  后端开发
+项目背景：校园摄影作品分享社区，需要支持高并发浏览与点赞
+技术栈：Spring Cloud、MySQL、Redis、RabbitMQ、Nginx
+个人职责：实现点赞与热度排行，使用 Redis ZSet 做热度榜，接口响应稳定在 50ms 以内
+难点：热点作品缓存击穿，采用互斥重建与逻辑过期解决
+
+专业技能
+编程语言：Java、Python、SQL、JavaScript
+框架与中间件：Spring Boot、Spring Cloud、MyBatis-Plus、Redis、Kafka、RabbitMQ
+数据库：MySQL、PostgreSQL、pgvector
+AI 相关：LangChain4j、RAG、Embedding、Prompt 工程、Ollama
+工程工具：Git、Maven、Docker、Jenkins、Linux
+
+获奖情况
+2023 年全国大学生服务外包创新创业大赛 国家级二等奖
+2022 年校级一等奖学金

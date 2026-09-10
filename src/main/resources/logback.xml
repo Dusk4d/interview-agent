@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  运行期日志配置。
+
+  两个刻意为之的取舍：
+  1) 只保留必要级别：生产排查依赖 INFO 级别的关键事件（导入/出题/评分/报告），
+     DEBUG 仅用于本项目的包且默认关闭，避免把简历相关文本刷进日志。
+  2) 日志格式不含请求体：隐私要求在解析、提示词构造处已经脱敏，
+     并且本项目的日志语句只记录 id、数量、耗时，不记录原文。
+-->
+<configuration>
+  <property name="PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"/>
+
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>${PATTERN}</pattern>
+      <charset>UTF-8</charset>
+    </encoder>
+  </appender>
+
+  <logger name="com.dusk4d.interview" level="INFO"/>
+  <logger name="org.springframework" level="WARN"/>
+  <logger name="org.apache" level="WARN"/>
+  <logger name="com.zaxxer" level="WARN"/>
+
+  <root level="WARN">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

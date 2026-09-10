@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  测试日志配置：只打印 WARN 以上，避免 Spring 上下文启动细节淹没断言失败信息。
+  断言失败由 TestRunner 输出（UTF-8），不依赖日志框架。
+-->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{30} - %msg%n</pattern>
+      <charset>UTF-8</charset>
+    </encoder>
+  </appender>
+
+  <logger name="com.dusk4d.interview" level="WARN"/>
+  <root level="ERROR">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

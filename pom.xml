@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.4.4</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.dusk4d.interview</groupId>
+  <artifactId>interview-agent</artifactId>
+  <version>0.1.0</version>
+  <name>interview-agent</name>
+  <description>Resume-driven AI interview coach (RAG + agent workflow)</description>
+
+  <properties>
+    <java.version>21</java.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    <pdfbox.version>3.0.5</pdfbox.version>
+    <!-- 离线环境锁定版本：本地仓库中 3.5.4 的插件依赖完整 -->
+    <surefire.version>3.5.4</surefire.version>
+    <!-- 测试由 TestRunner 执行，surefire 默认跳过（有网环境可置为 false） -->
+    <skipTests>true</skipTests>
+    <main.class>com.dusk4d.interview.InterviewAgentApplication</main.class>
+    <bootstrap.class>com.dusk4d.interview.bootstrap.Bootstrap</bootstrap.class>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!--
+        离线环境修正：本地仓库中 junit-jupiter 5.11.4 的 junit-platform-launcher 缺 jar，
+        只有 1.13.4 / 5.13.4 这一组完整。整组对齐到 5.13.4 + 1.13.4，
+        避免 launcher 与 engine 版本错配（协议不兼容会直接报错）。
+        该组版本同样满足 spring-boot-starter-test 对 JUnit 5 的要求。
+      -->
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>5.13.4</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.junit.platform</groupId>
+        <artifactId>junit-platform-launcher</artifactId>
+        <version>1.13.4</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>pdfbox</artifactId>
+      <version>${pdfbox.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!--
+      自带测试入口所需的 launcher。测试执行统一走
+      `mvn test-compile` + `java com.dusk4d.interview.testkit.TestRunner`（见 scripts/run-tests.ps1）：
+      离线仓库中 surefire 的 provider 依赖不完整，而 TestRunner 只用 launcher + engine，
+      依赖最小、行为可预期，也便于把用例名直接传给启动器做定向调试。
+    -->
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>app</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <encoding>UTF-8</encoding>
+          <compilerArgs>
+            <arg>-parameters</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>${bootstrap.class}</mainClass>
+              <addClasspath>true</addClasspath>
+              <classpathPrefix>lib/</classpathPrefix>
+            </manifest>
+            <manifestEntries>
+              <Implementation-Title>interview-agent</Implementation-Title>
+              <Implementation-Version>${project.version}</Implementation-Version>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>${surefire.version}</version>
+        <configuration>
+          <argLine>-Dfile.encoding=UTF-8</argLine>
+          <excludedGroups>live</excludedGroups>
+          <!--
+            默认跳过：离线仓库中 surefire 的 provider 依赖（junit-platform-launcher 1.11.4）缺 jar。
+            测试统一由 scripts/run-tests.ps1 调用 TestRunner 执行；
+            在有网环境可用 `mvn test -DskipTests=false` 走原生 surefire。
+          -->
+          <skipTests>${skipTests}</skipTests>
+        </configuration>
+      </plugin>
+      <!--
+        说明：这里刻意不使用 maven-shade-plugin 打 fat jar。
+        原因：离线仓库中没有 shade 插件（及其依赖），而 maven-jar-plugin 可用。
+        因此分发包由 scripts/build-dist.ps1 组装：target/app.jar + lib/*.jar，
+        并由 app.cmd / app.sh 通过 java -cp "app.jar;lib/*" 启动。
+        在有网环境下如果希望得到单文件 fat jar，可自行加回 shade 插件。
+      -->
+    </plugins>
+  </build>
+</project>
