@@ -53,11 +53,32 @@ public class ResumeFactExtractor {
                     "projects", "project experience"),
             Section.SKILLS, List.of("专业技能", "技术栈", "技能特长", "技能清单", "掌握技能", "技能",
                     "个人技能", "技术能力", "skills", "technical skills"),
-            Section.AWARDS, List.of("获奖情况", "荣誉奖项", "奖项荣誉", "获奖经历", "荣誉",
-                    "awards", "honors"),
+            // 「获奖荣誉」这类组合标题很常见，但既不是任何别名的前缀也不是后缀，
+            // 因此除了前缀匹配外，短行还允许「包含强关键词」的匹配（见 matchHeader）
+            Section.AWARDS, List.of("获奖情况", "荣誉奖项", "奖项荣誉", "获奖经历", "获奖荣誉", "荣誉奖励",
+                    "竞赛获奖", "荣誉", "获奖", "奖项", "awards", "honors"),
             Section.BASICS, List.of("个人信息", "基本信息", "自我评价", "个人简介", "自我介绍", "联系方式",
                     "profile", "summary", "about me")
     );
+
+    /**
+     * 强关键词：短标题行只要「包含」这些词就按对应区块处理。
+     *
+     * <p>为什么需要：简历标题写法极多（获奖荣誉 / 竞赛获奖 / 荣誉与奖项…），
+     * 仅靠前缀匹配会整块丢失。实测「获奖荣誉」就因此被漏掉，而且没有告警。
+     * 只对强关键词做包含匹配，并要求行足够短（见 {@code STRONG_KEYWORD_MAX_LENGTH}），
+     * 避免把正文句子误判成标题。
+     */
+    private static final Map<Section, List<String>> STRONG_KEYWORDS = Map.of(
+            Section.AWARDS, List.of("获奖", "奖项", "荣誉", "奖学金", "竞赛"),
+            Section.SKILLS, List.of("技能", "技术栈", "技术能力"),
+            Section.EDUCATION, List.of("教育经历", "教育背景", "学习经历"),
+            Section.INTERNSHIP, List.of("实习经历", "工作经历", "实习经验", "工作经验"),
+            Section.PROJECT, List.of("项目经历", "项目经验", "实践经历"),
+            Section.BASICS, List.of("个人信息", "基本信息", "自我评价", "自我介绍"));
+
+    /** 强关键词包含匹配允许的最大行长度（超过则视为正文）。 */
+    private static final int STRONG_KEYWORD_MAX_LENGTH = 12;
 
     private static final List<String> PROJECT_TITLE_MARKERS =
             List.of("项目", "系统", "平台", "网站", "服务", "引擎", "app", "小程序", "工具");
@@ -229,6 +250,9 @@ public class ResumeFactExtractor {
             }
         }
         if (matched == null) {
+            matched = matchStrongKeyword(bare, line.length());
+        }
+        if (matched == null) {
             return null;
         }
         // 命中多个区块关键词（如「项目与实习」）时取更具体者；过长的行直接放弃
@@ -236,6 +260,30 @@ public class ResumeFactExtractor {
             return null;
         }
         return matched;
+    }
+
+    /**
+     * 强关键词包含匹配。
+     *
+     * <p>用于「获奖荣誉」「竞赛获奖」这类既非前缀也非完全相同的组合标题。
+     * 只在行足够短时启用，并按命中关键词长度择最长者（「获奖荣誉」同时含「获奖」与「荣誉」，
+     * 两者同属 AWARDS，不影响结果；但跨区块时取更具体的那个）。
+     */
+    private Section matchStrongKeyword(String bare, int rawLength) {
+        if (rawLength > STRONG_KEYWORD_MAX_LENGTH) {
+            return null;
+        }
+        Section best = null;
+        int bestLength = 0;
+        for (Map.Entry<Section, List<String>> entry : STRONG_KEYWORDS.entrySet()) {
+            for (String keyword : entry.getValue()) {
+                if (bare.contains(keyword) && keyword.length() > bestLength) {
+                    best = entry.getKey();
+                    bestLength = keyword.length();
+                }
+            }
+        }
+        return best;
     }
 
     /** 去掉标题前后装饰：序号、冒号、方括号、dash。 */
