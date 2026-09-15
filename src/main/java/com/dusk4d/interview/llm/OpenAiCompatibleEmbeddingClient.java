@@ -35,7 +35,10 @@ public class OpenAiCompatibleEmbeddingClient implements EmbeddingClient {
         this.batchSize = batchSize <= 0 ? 16 : batchSize;
         this.readTimeout = java.time.Duration.ofMillis(Math.max(1000, readTimeoutMs));
         this.objectMapper = objectMapper;
+        // 与对话客户端同理：必须强制 HTTP/1.1。
+        // JDK HttpClient 默认的 HTTP/2 升级在 LM Studio（Express）上无法协商，会直接读超时。
         this.httpClient = java.net.http.HttpClient.newBuilder()
+                .version(java.net.http.HttpClient.Version.HTTP_1_1)
                 .connectTimeout(java.time.Duration.ofMillis(Math.max(500, connectTimeoutMs)))
                 .build();
     }

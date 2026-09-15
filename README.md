@@ -4,7 +4,7 @@
 
 这个项目的重点不是「调用一次大模型」，而是把**简历事实、检索、问题生成、面试状态、回答评估、学习报告**组织成一条可重复使用、可测试、可解释的流程。
 
-> 当前状态：**MVP 全部功能已完成，自动化测试全绿（146 项，含真实 HTTP 端到端、MVP 总验收与打包后进程级冒烟）；并已接入真实本地模型（Ollama qwen3:1.7b）完成实测：问题来源可核验率 100%、结构化输出一次成功率 100%、评分在固定问题与上下文下可完全复现（标准差 0.000）**。
+> 当前状态：**MVP 全部功能已完成，自动化测试全绿（151 项，含真实 HTTP 端到端、MVP 总验收与打包后进程级冒烟）；并已接入真实本地模型（Ollama qwen3:1.7b）完成实测：问题来源可核验率 100%、结构化输出一次成功率 100%、评分在固定问题与上下文下可完全复现（标准差 0.000）**。
 > 文中所有量化结论都标注了来源（测试用例或脚本）；未实测的指标一律写「待测」，不做没有证据的宣称。
 
 ---
@@ -215,7 +215,7 @@ EVALUATING -> FINISHED -> REPORT_READY
 
 ## 六、测试与验证
 
-### 自动化测试（146 项，全部通过）
+### 自动化测试（151 项，全部通过）
 
 ```bat
 powershell -File scripts\run-tests.ps1
@@ -223,22 +223,38 @@ powershell -File scripts\run-tests.ps1
 
 | 测试类 | 数量 | 覆盖内容 |
 |---|---|---|
-| `PrivacyMaskerTest` | 12 | 手机/邮箱/证件/地址脱敏、技术数字不误伤、日志脱敏 |
+| `PrivacyMaskerTest` | 9（12 次执行） | 手机/邮箱/证件/地址脱敏、技术数字不误伤、日志脱敏 |
 | `TextCleanerTest` | 9 | 空文本、归一化、页眉页脚、页码、乱码、噪声判定 |
 | `DocumentExtractorRouterTest` | 13 | TXT(UTF-8/GBK)、DOCX(段落/表格/空正文)、PDF(文字/多页/图片型)、伪装扩展名 |
 | `ResumeFactExtractorTest` | 10 | 区块识别、项目分块、技术栈、低置信度不编造、脱敏 |
 | `VectorStoreTest` | 9 | 向量确定性、元数据过滤、minScore、幂等 upsert |
-| `StructuredOutputParserTest` | 11 | 代码围栏、前后文截取、中文引号、截断修复、缺字段报错 |
+| `StructuredOutputParserTest` | 12 | 代码围栏、前后文截取、中文引号、截断修复、缺字段报错 |
 | `InterviewStateMachineTest` | 7 | 全流程转移、终态封闭、非法转移拒绝、提示文案 |
-| `HeuristicEvaluatorTest` | 7 | 空/答非所问/详细回答的排序、降级上限、报告统计 |
+| `HeuristicEvaluatorTest` | 8 | 空/答非所问/详细回答的排序、降级上限、报告统计 |
 | `InterviewFlowTest` | 10 | 服务层端到端闭环 + 重复提交/空回答/越界/追问上限/人工修正 |
-| `HttpEndToEndTest` | 9 | **真实 HTTP + 内嵌 Tomcat**：multipart 上传、静态资源、全链路、错误码、检索调试、题目上限自动结束 |
+| `HttpEndToEndTest` | 10 | **真实 HTTP + 内嵌 Tomcat**：multipart 上传、静态资源、配置绑定一致性、全链路、错误码、检索调试 |
 | `JsonFileStoreTest` | 4 | 写盘后重新打开仓储（模拟重启）读回简历/会话/评分/报告；损坏文件隔离 |
-| `VectorIndexInitializerTest` | 4 | 启动期索引重建、幂等、空库跳过、空事实跳过 |
+| `VectorIndexInitializerTest` | 8 | 启动期索引重建、幂等、空库跳过；**AppProperties 必须真正绑定外部配置** |
 | `MultiResumeRegressionTest` | 4 | 4 份不同结构简历批量解析不丢字段、结果可复现、极简简历不编造 |
+| `AnswerEvaluatorToleranceTest` | 10 | 真实模型畸形输出：数组维度、10 分制、嵌套 scores、中文维度名、缺维度必须降级 |
+| `OpenAiCompatibleClientTest` | 10 | 思考链抑制边界、**HTTP/1.1 强制**、**response_format 协商与降级** |
 | `MvpAcceptanceTest` | 14 | **方案书第九节验收标准逐条对应**：全格式导入、事实修正、双模式出题、评分可解释、追问不串题、报告生成、四类失败路径、隐私、跨重启恢复，以及全部反面场景 |
 
-合计 **146 项**。其中 `MvpAcceptanceTest` 是「一套跑完即可判断系统是否达标」的门禁测试。
+合计 **151 次测试执行全部通过**。其中 `MvpAcceptanceTest` 是「一套跑完即可判断系统是否达标」的门禁测试。
+
+### 两模型对照实测（同一评测脚本，同一批样本）
+
+| 指标 | qwen3:1.7b（Ollama） | gemma-3-4b（LM Studio） |
+|---|---|---|
+| 问题来源可核验率 | 100%（8/8） | 100%（8/8） |
+| 结构化输出一次成功率 | 100%（16/16） | 100%（16/16） |
+| 优秀回答评分（重复 3 次） | 4.5 / 4.0 / 4.0（σ=0.289） | **3.75 ×3（σ=0.000）** |
+| 答非所问回答 | 0.0~2.0 跳动（σ=1.155） | 更稳定 |
+| 出题 P50 / 评分 P50 | 11.2s / 约 15s | 9.6s / 33.4s |
+
+结论：**评分稳定性受模型规模影响明显**（4B 在优秀回答上完全一致），但大模型评分耗时翻倍——
+选型有数据支撑，而不是凭感觉。两个模型的问题来源可核验率都是 100%，说明「问题不脱离简历」
+由检索与提示词边界保证，不依赖模型规模。
 
 ### 进程级冒烟验收（打包后真实运行）
 
@@ -254,7 +270,7 @@ scripts\smoke-test.cmd
 
 | 项目 | 数值 | 来源 |
 |---|---|---|
-| 自动化测试用例 | 146 项，失败 0 | `scripts\run-tests.ps1` |
+| 自动化测试用例 | 151 项，失败 0 | `scripts\run-tests.ps1` |
 | 打包体积 | `dist/` ≈ 23.9 MB（43 个依赖 jar） | `scripts\build-dist.ps1` |
 | 应用启动耗时 | ≈ 3.0 秒（空库，Mock 模型） | `dist/run-out.log` |
 | 知识库种子 | 31 条，8 个主题 | `GET /api/health` |
@@ -351,7 +367,7 @@ git push -u origin main
 | 评分为什么可信？ | 固定 Rubric + 结构化输出 + 分项依据 + 降级时压低上限并标注 | `agent/AnswerEvaluator.java`、`agent/HeuristicEvaluator.java` |
 | 模型挂了怎么办？ | 连接/超时/非法 JSON/空回答四类分别有明确降级路径，不抛 500 | `error/LlmException.java`、`api/ApiExceptionHandler.java` |
 | 简历隐私怎么处理？ | 脱敏在解析后立即执行，联系方式不进上下文，日志不写原文 | `privacy/PrivacyMasker.java`、`HttpEndToEndTest#uploadResumeViaMultipart` |
-| 怎么验证质量？ | 146 项自动化测试 + 打包后进程级冒烟 + 真实模型离线评测（LiveEvalMain） | `src/test/java/**`、`scripts/smoke-test.cmd` |
+| 怎么验证质量？ | 151 项自动化测试 + 打包后进程级冒烟 + 真实模型离线评测（LiveEvalMain） | `src/test/java/**`、`scripts/smoke-test.cmd` |
 
 更多设计与取舍见 `docs/DESIGN.md`，接口细节见 `docs/API.md`，验证步骤见 `docs/VERIFICATION.md`。
 
@@ -377,7 +393,7 @@ interview-agent/
 │   ├── application.properties  配置
 │   ├── knowledge/knowledge-base.json  八股知识库种子（31 条）
 │   └── static/                 前端（index.html / styles.css / app.js，零依赖）
-└── src/test/java/...           146 项自动化测试 + 评测/冒烟工具
+└── src/test/java/...           151 项自动化测试 + 评测/冒烟工具
 ```
 
 ---

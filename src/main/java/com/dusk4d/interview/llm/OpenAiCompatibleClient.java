@@ -43,10 +43,22 @@ public class OpenAiCompatibleClient implements LlmClient {
     private final ObjectMapper objectMapper;
     private final Duration readTimeout;
     private final boolean disableThinking;
+    /** 显式指定的 JSON 模式（auto / json_object / json_schema / text）；null 表示按服务能力自动选择。 */
+    private final String jsonFormatOverride;
+    /** 已确认该服务不支持的 JSON 模式，避免每次调用都重复撞 400。 */
+    private final java.util.Set<String> unsupportedFormats =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public OpenAiCompatibleClient(String baseUrl, String apiKey, String model, int maxTokens,
                                   int connectTimeoutMs, int readTimeoutMs, ObjectMapper objectMapper,
                                   boolean disableThinking) {
+        this(baseUrl, apiKey, model, maxTokens, connectTimeoutMs, readTimeoutMs, objectMapper,
+                disableThinking, null);
+    }
+
+    public OpenAiCompatibleClient(String baseUrl, String apiKey, String model, int maxTokens,
+                                  int connectTimeoutMs, int readTimeoutMs, ObjectMapper objectMapper,
+                                  boolean disableThinking, String jsonFormat) {
         this.baseUrl = trimTrailingSlash(baseUrl);
         this.apiKey = apiKey;
         this.model = model;
@@ -54,7 +66,23 @@ public class OpenAiCompatibleClient implements LlmClient {
         this.readTimeout = Duration.ofMillis(Math.max(1000, readTimeoutMs));
         this.objectMapper = objectMapper;
         this.disableThinking = disableThinking;
-        this.httpClient = HttpClient.newBuilder()
+        this.jsonFormatOverride = jsonFormat;
+        this.httpClient = buildHttpClient(connectTimeoutMs);
+    }
+
+    /**
+     * 构造 HTTP 客户端。
+     *
+     * <p><b>必须强制 HTTP/1.1。</b>JDK {@link HttpClient} 默认会先尝试 HTTP/2 升级
+     * （{@code Upgrade: h2c}），而 LM Studio 的 Express 服务器无法正确协商该升级：
+     * 请求会一直挂着直到读超时。实测同一地址 curl 92ms 返回 200、JDK 默认版本 8 秒超时；
+     * 强制 HTTP/1.1 后同样 92ms 返回。Ollama 支持 HTTP/2，所以这个问题此前没有暴露。
+     *
+     * <p>本地模型服务都在本机，HTTP/2 没有实际收益，强制 1.1 换来确定性。
+     */
+    private HttpClient buildHttpClient(int connectTimeoutMs) {
+        return HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofMillis(Math.max(500, connectTimeoutMs)))
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
@@ -62,8 +90,69 @@ public class OpenAiCompatibleClient implements LlmClient {
 
     @Override
     public LlmResponse chat(LlmRequest request) {
+        int attempts = request.expectsJson() ? 2 : 1;
+        LlmException lastFailure = null;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            String format = currentFormat(request);
+            try {
+                return sendOnce(request, format);
+            } catch (LlmException e) {
+                lastFailure = e;
+                if (attempt + 1 >= attempts || !isUnsupportedResponseFormat(e)) {
+                    throw e;
+                }
+                // 服务不支持当前 JSON 模式（例如 LM Studio 只认 json_schema，拒绝 json_object）。
+                // 降级到 text 并按服务能力记忆，避免后续每次调用都重复撞墙。
+                log.warn("模型服务不支持 response_format={}（{}），下次改用 text 模式：{}",
+                        format, baseUrl, abbreviate(e.getMessage()));
+                markFormatUnsupported(format);
+            }
+        }
+        throw lastFailure == null ? LlmException.badResponse("模型调用失败", null) : lastFailure;
+    }
+
+    /** 当前请求应使用的 JSON 模式。 */
+    private String currentFormat(LlmRequest request) {
+        if (!request.expectsJson()) {
+            return null;
+        }
+        if (jsonFormatOverride != null && !jsonFormatOverride.isBlank()) {
+            return "auto".equalsIgnoreCase(jsonFormatOverride) ? preferredJsonFormat() : jsonFormatOverride;
+        }
+        return preferredJsonFormat();
+    }
+
+    private String preferredJsonFormat() {
+        if (unsupportedFormats.contains("json_object")) {
+            return unsupportedFormats.contains("json_schema") ? "text" : "json_schema";
+        }
+        return "json_object";
+    }
+
+    private void markFormatUnsupported(String format) {
+        if (format == null) {
+            return;
+        }
+        if (!unsupportedFormats.add(format)) {
+            return;
+        }
+        String next = preferredJsonFormat();
+        log.warn("已记录模型服务 {} 不支持 response_format={}，后续结构化请求将使用 {}。"
+                        + "如需固定行为，可设置 app.llm.json-format。", baseUrl, format, next);
+    }
+
+    /** 判断失败是否源于「服务不支持该 response_format」。 */
+    private boolean isUnsupportedResponseFormat(LlmException e) {
+        if (e.toFailureKind() != LlmFailureKind.BAD_RESPONSE) {
+            return false;
+        }
+        String message = String.valueOf(e.getMessage()).toLowerCase(java.util.Locale.ROOT);
+        return message.contains("response_format") || message.contains("json_object");
+    }
+
+    private LlmResponse sendOnce(LlmRequest request, String format) {
         long start = System.nanoTime();
-        String body = buildBody(request);
+        String body = buildBody(request, format);
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/chat/completions"))
                 .timeout(readTimeout)
@@ -106,7 +195,7 @@ public class OpenAiCompatibleClient implements LlmClient {
                 || message.contains("failed to connect");
     }
 
-    private String buildBody(LlmRequest request) {
+    private String buildBody(LlmRequest request, String jsonFormat) {
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", model);
         root.put("temperature", request.temperature());
@@ -125,11 +214,18 @@ public class OpenAiCompatibleClient implements LlmClient {
         ObjectNode user = messages.addObject();
         user.put("role", "user");
         user.put("content", withThinkingSuppressed(request.userPrompt()));
-        if (request.expectsJson()) {
-            // LM Studio / Ollama / OpenAI 均支持 response_format=json_object。
-            // 注意：实测 Ollama 在 json_object 模式下仍会先输出思考内容，
-            // 因此必须同时用 /no_think 抑制，否则正文可能为空。
-            root.putObject("response_format").put("type", "json_object");
+        if (jsonFormat != null && !"text".equals(jsonFormat)) {
+            // 兼容性说明（真实服务实测）：
+            // · Ollama 支持 json_object；
+            // · LM Studio 只接受 json_schema / text，传 json_object 会返回 400。
+            // 因此这里按「服务能力」选择模式，不支持时由 chat() 自动降级到 text 并记忆结果。
+            ObjectNode responseFormat = root.putObject("response_format");
+            responseFormat.put("type", jsonFormat);
+            if ("json_schema".equals(jsonFormat)) {
+                ObjectNode schema = responseFormat.putObject("json_schema");
+                schema.put("name", request.schemaName() == null ? "structured_output" : request.schemaName());
+                schema.putObject("schema").put("type", "object");
+            }
         }
         try {
             return objectMapper.writeValueAsString(root);
