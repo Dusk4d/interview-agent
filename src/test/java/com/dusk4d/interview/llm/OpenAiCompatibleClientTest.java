@@ -27,7 +27,7 @@ class OpenAiCompatibleClientTest {
 
     private static AppProperties.Llm llm(String model, Boolean disableThinking) {
         return new AppProperties.Llm("http://127.0.0.1:11434/v1", "k", model, "nomic-embed",
-                0.2, 1200, 1000, 30000, 0, false, disableThinking);
+                0.2, 1200, 1000, 30000, 0, false, disableThinking, null, null);
     }
 
     private JsonNode requestBody(boolean disableThinking, String model, LlmRequest request) throws Exception {

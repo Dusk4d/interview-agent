@@ -4,7 +4,7 @@
 
 这个项目的重点不是「调用一次大模型」，而是把**简历事实、检索、问题生成、面试状态、回答评估、学习报告**组织成一条可重复使用、可测试、可解释的流程。
 
-> 当前状态：**MVP 全部功能已完成，自动化测试全绿（127 项，含真实 HTTP 端到端、MVP 总验收与打包后进程级冒烟）**。
+> 当前状态：**MVP 全部功能已完成，自动化测试全绿（146 项，含真实 HTTP 端到端、MVP 总验收与打包后进程级冒烟）；并已接入真实本地模型（Ollama qwen3:1.7b）完成实测：问题来源可核验率 100%、结构化输出一次成功率 100%、评分在固定问题与上下文下可完全复现（标准差 0.000）**。
 > 文中所有量化结论都标注了来源（测试用例或脚本）；未实测的指标一律写「待测」，不做没有证据的宣称。
 
 ---
@@ -215,7 +215,7 @@ EVALUATING -> FINISHED -> REPORT_READY
 
 ## 六、测试与验证
 
-### 自动化测试（127 项，全部通过）
+### 自动化测试（146 项，全部通过）
 
 ```bat
 powershell -File scripts\run-tests.ps1
@@ -238,7 +238,7 @@ powershell -File scripts\run-tests.ps1
 | `MultiResumeRegressionTest` | 4 | 4 份不同结构简历批量解析不丢字段、结果可复现、极简简历不编造 |
 | `MvpAcceptanceTest` | 14 | **方案书第九节验收标准逐条对应**：全格式导入、事实修正、双模式出题、评分可解释、追问不串题、报告生成、四类失败路径、隐私、跨重启恢复，以及全部反面场景 |
 
-合计 **127 项**。其中 `MvpAcceptanceTest` 是「一套跑完即可判断系统是否达标」的门禁测试。
+合计 **146 项**。其中 `MvpAcceptanceTest` 是「一套跑完即可判断系统是否达标」的门禁测试。
 
 ### 进程级冒烟验收（打包后真实运行）
 
@@ -254,17 +254,37 @@ scripts\smoke-test.cmd
 
 | 项目 | 数值 | 来源 |
 |---|---|---|
-| 自动化测试用例 | 127 项，失败 0 | `scripts\run-tests.ps1` |
+| 自动化测试用例 | 146 项，失败 0 | `scripts\run-tests.ps1` |
 | 打包体积 | `dist/` ≈ 23.9 MB（43 个依赖 jar） | `scripts\build-dist.ps1` |
 | 应用启动耗时 | ≈ 3.0 秒（空库，Mock 模型） | `dist/run-out.log` |
 | 知识库种子 | 31 条，8 个主题 | `GET /api/health` |
 | 单份简历解析后事实数 | 6 条（示例简历），项目 1 个，技术栈 14 项 | 冒烟脚本输出 |
 
+### 真实模型实测指标（Ollama qwen3:1.7b 本地）
+
+复现：`dist\app.cmd` 前设置模型环境变量，或直接用评测工具
+
+```bat
+:: 评测工具（对已运行的模型服务跑完整评测，输出 target\eval-report.md）
+java -cp "target\classes;target\test-classes;<依赖>" ^
+     com.dusk4d.interview.testkit.LiveEvalMain --model=qwen3:1.7b --runs=3 --questions=2
+```
+
+| 指标 | 实测值 |
+|---|---|
+| 问题来源可核验率 | **8/8 = 100%**（问题 sourceIds 全部回指正确简历事实/知识点） |
+| 结构化输出一次成功率 | **100%（16/16 次调用，0 次降级）** |
+| 优秀回答评分 | 4.25 / 5（技术正确性 4、完整性 3、经历匹配 5、表达结构 5） |
+| 反馈完整性 | 四维齐全、每维有依据、含遗漏点与参考结构 |
+| 出题耗时 | P50 **11.2s** / P95 18.7s |
+| 评分耗时 | P50 **约 15s** / P95 约 22s |
+| 评分可复现性（temp=0.0，固定问题） | 同一回答 5 次评分标准差 **0.000** |
+
 ### 尚未测量的指标（**不在简历里写成结论**）
 
-问题相关性比例、评分一致性（同答案多次运行的分数方差）、结构化输出成功率、平均响应时间、
-完整面试完成率、用户满意度。这些需要按方案书第十一节建立评测集（10 份简历 + 人工标注问题/回答）后测量，当前**待测**。
-系统已预留观测点：`/api/retrieval/search` 用于复核问题依据，评分结果里的 `degraded` 标记用于统计降级率。
+问题相关性的**人工语义判定**（系统侧来源可核验率已测）、完整面试完成率、用户满意度、
+更大模型（7B/14B）的对照数据。这些需要真实用户或更多模型样本；系统已预留观测点
+（`/api/retrieval/search` 复核问题依据、评分结果 `degraded` 标记统计降级率、`LiveEvalMain` 可直接换模型重跑）。
 
 ---
 
@@ -276,6 +296,10 @@ scripts\smoke-test.cmd
 | `app.llm.chat-model` | `qwen2.5-7b-instruct` | 模型名 |
 | `app.llm.embedding-model` | `text-embedding-nomic-embed-text-v1.5` | 远程向量模型（`app.embedding.mode=remote` 时使用） |
 | `app.llm.read-timeout-ms` | 45000 | 读取超时，超时走降级而非 500 |
+| `app.llm.temperature` | 0.3 | **出题**采样温度（保留问法多样性） |
+| `app.llm.eval-temperature` | **0.0** | **评分**采样温度；贪心解码以获得可复现分数（实测 0.3 时极差可达 1.0 分） |
+| `app.llm.eval-samples` | **1** | 评分采样次数（>1 取中位数）；默认关闭——实测在 temp=0.0 下无额外收益，却让耗时成倍增加 |
+| `app.llm.disable-thinking` | 自动 | 推理模型（Qwen3/R1 等）自动关闭思考链；显式设置可覆盖 |
 | `app.embedding.mode` | `local` | `local` 哈希向量 / `remote` 远端向量 |
 | `app.retrieval.top-k` / `min-score` | 5 / 0.08 | 检索条数与最低相似度 |
 | `app.interview.max-questions` | 8 | 单场题目上限 |
@@ -327,7 +351,7 @@ git push -u origin main
 | 评分为什么可信？ | 固定 Rubric + 结构化输出 + 分项依据 + 降级时压低上限并标注 | `agent/AnswerEvaluator.java`、`agent/HeuristicEvaluator.java` |
 | 模型挂了怎么办？ | 连接/超时/非法 JSON/空回答四类分别有明确降级路径，不抛 500 | `error/LlmException.java`、`api/ApiExceptionHandler.java` |
 | 简历隐私怎么处理？ | 脱敏在解析后立即执行，联系方式不进上下文，日志不写原文 | `privacy/PrivacyMasker.java`、`HttpEndToEndTest#uploadResumeViaMultipart` |
-| 怎么验证质量？ | 127 项自动化测试 + 打包后进程级冒烟；评测集与量化待补 | `src/test/java/**`、`scripts/smoke-test.cmd` |
+| 怎么验证质量？ | 146 项自动化测试 + 打包后进程级冒烟 + 真实模型离线评测（LiveEvalMain） | `src/test/java/**`、`scripts/smoke-test.cmd` |
 
 更多设计与取舍见 `docs/DESIGN.md`，接口细节见 `docs/API.md`，验证步骤见 `docs/VERIFICATION.md`。
 
@@ -353,7 +377,7 @@ interview-agent/
 │   ├── application.properties  配置
 │   ├── knowledge/knowledge-base.json  八股知识库种子（31 条）
 │   └── static/                 前端（index.html / styles.css / app.js，零依赖）
-└── src/test/java/...           127 项自动化测试 + 测试工具
+└── src/test/java/...           146 项自动化测试 + 评测/冒烟工具
 ```
 
 ---
@@ -363,7 +387,8 @@ interview-agent/
 * **无语音**：文本陪练，不含语音识别/合成与视频分析。
 * **无 OCR**：图片型/扫描版 PDF 会明确提示不支持，而不是产出虚假结构。
 * **向量能力**：默认哈希向量在离线环境可用但不是语义模型；接 `app.embedding.mode=remote` 效果更好，混合检索用于弥补字面召回。
-* **未测指标**：评分一致性、问题相关性等需要按方案书建立评测集后测量（见第六节）。
-* **下一步**：评测集与量化报告 → 多轮对话式追问策略 → 历史报告趋势 → 语音链路。
+* **评分边界**：在固定问题与上下文下评分可完全复现（标准差 0.000）；但小模型对「擦边回答」的档位判定仍不稳定，换更大模型可改善。
+* **仅 1.7B 模型实测**：更大的本地模型（7B/14B）的耗时与质量对照待补。
+* **下一步**：更大模型对照评测 → 多轮对话式追问策略 → 历史报告趋势 → 语音链路。
 
 > 免责声明：本系统的评分仅作为训练辅助，不作为客观考试成绩。

@@ -93,6 +93,37 @@ class HttpEndToEndTest {
 
     @Test
     @Order(3)
+    @DisplayName("配置诊断：绑定结果必须与 Spring 解析结果一致（曾因多构造器静默丢失绑定）")
+    void configDiagnosticsReportsConsistentBinding() throws Exception {
+        ResponseEntity<String> response = rest.getForEntity(url("/api/diagnostics/config"), String.class);
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        JsonNode body = json(response);
+
+        // Spring 解析出的属性值
+        String resolvedBaseUrl = body.path("resolved").path("app.llm.base-url").asText();
+        String resolvedChatModel = body.path("resolved").path("app.llm.chat-model").asText();
+        assertThat(resolvedBaseUrl).isNotBlank();
+        assertThat(resolvedChatModel).isNotBlank();
+
+        // 最终绑定到 AppProperties 的值：必须一致，否则说明绑定再次被静默放弃
+        assertThat(body.path("bound").path("baseUrl").asText())
+                .as("AppProperties.llm.baseUrl 必须等于 app.llm.base-url（否则绑定失效）")
+                .isEqualTo(resolvedBaseUrl);
+        assertThat(body.path("bound").path("chatModel").asText())
+                .as("AppProperties.llm.chatModel 必须等于 app.llm.chat-model")
+                .isEqualTo(resolvedChatModel);
+
+        // 评分可复现性配置必须有确定值
+        assertThat(body.path("bound").path("evalSamples").asInt()).isBetween(1, 5);
+        assertThat(body.path("bound").path("evalTemperature").asDouble()).isBetween(0.0, 1.0);
+        assertThat(body.path("bound").path("storageMode").asText())
+                .isEqualTo(body.path("resolved").path("app.storage.mode").asText());
+        // 环境变量快照存在（用于排查容器注入问题）
+        assertThat(body.path("env").isObject()).isTrue();
+    }
+
+    @Test
+    @Order(3)
     @DisplayName("multipart 上传 TXT 简历并解析出结构化事实")
     void uploadResumeViaMultipart() throws Exception {
         HttpHeaders headers = new HttpHeaders();

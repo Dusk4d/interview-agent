@@ -41,7 +41,7 @@ class AnswerEvaluatorToleranceTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final AppProperties PROPERTIES = new AppProperties(
-            new AppProperties.Llm("http://127.0.0.1:1/v1", "k", "mock", "e", 0.2, 800, 500, 1000, 0, false, null),
+            new AppProperties.Llm("http://127.0.0.1:1/v1", "k", "mock", "e", 0.2, 800, 500, 1000, 0, false, null, null, null),
             null, null, null, null, null, null);
 
     private static InterviewQuestion question() {

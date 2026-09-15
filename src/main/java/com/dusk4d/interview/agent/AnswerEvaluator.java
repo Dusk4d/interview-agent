@@ -59,6 +59,8 @@ public class AnswerEvaluator {
     /** 解析默认值：避免每次调用都做空判断。 */
     private final double defaultTemperature;
     private final int defaultMaxTokens;
+    /** 评分采样次数（>1 时取中位数，用于压制小模型的打分波动）。 */
+    private final int evalSamples;
 
     public AnswerEvaluator(LlmClient llmClient, StructuredOutputParser parser,
                            AppProperties properties, Clock clock) {
@@ -67,9 +69,11 @@ public class AnswerEvaluator {
         this.properties = properties;
         this.clock = clock;
         AppProperties.Llm llm = properties.llm();
-        // properties 允许整块缺失（例如手工构造用于单测），这里给出安全默认值而不是抛 NPE
-        this.defaultTemperature = llm == null ? 0.3 : llm.temperature();
+        // properties 允许整块缺失（例如手工构造用于单测），这里给出安全默认值而不是抛 NPE。
+        // 评分默认使用 0.0 温度（贪心解码）以获得可复现的分数，出题仍用常规温度。
+        this.defaultTemperature = llm == null ? 0.0 : llm.resolvedEvalTemperature();
         this.defaultMaxTokens = llm == null ? 1600 : llm.maxTokens();
+        this.evalSamples = llm == null ? 1 : llm.resolvedEvalSamples();
     }
 
     /**
@@ -91,15 +95,116 @@ public class AnswerEvaluator {
         }
 
         String userPrompt = Prompts.evaluationUser(question, answer, context, facts);
+        int samples = evalSamples;
+        List<Map<String, Object>> successfulRuns = new ArrayList<>();
+        List<String> rawOutputs = new ArrayList<>();
+        LlmException lastFailure = null;
+        for (int attempt = 0; attempt < samples; attempt++) {
+            try {
+                var response = llmClient.chat(LlmRequest.structured(Prompts.EVALUATION_SYSTEM, userPrompt,
+                        "evaluation", SCHEMA_FIELDS, defaultTemperature, defaultMaxTokens));
+                successfulRuns.add(parser.parseObject(response.content(), REQUIRED_FIELDS));
+                rawOutputs.add(response.content());
+            } catch (LlmException e) {
+                lastFailure = e;
+                log.warn("评分第 {}/{} 次采样失败（{}）：{}", attempt + 1, samples, e.kind(), e.getMessage());
+            }
+        }
+        if (successfulRuns.isEmpty()) {
+            log.warn("评分失败（{}），降级为启发式评估：{}", lastFailure == null ? "UNKNOWN" : lastFailure.kind(),
+                    lastFailure == null ? "未知原因" : lastFailure.getMessage());
+            return degraded(question, answerId, answer,
+                    lastFailure == null ? "模型调用失败" : lastFailure.getMessage(), null, now);
+        }
+        Map<String, Object> merged = successfulRuns.size() == 1
+                ? successfulRuns.get(0)
+                : medianOf(successfulRuns);
         try {
-            var response = llmClient.chat(LlmRequest.structured(Prompts.EVALUATION_SYSTEM, userPrompt,
-                    "evaluation", SCHEMA_FIELDS, defaultTemperature, defaultMaxTokens));
-            Map<String, Object> parsed = parser.parseObject(response.content(), REQUIRED_FIELDS);
-            return fromModel(question, answerId, parsed, response.content(), now);
+            AnswerEvaluation evaluation = fromModel(question, answerId, merged,
+                    rawOutputs.isEmpty() ? null : rawOutputs.get(0), now);
+            if (successfulRuns.size() > 1) {
+                evaluation = withMultiSampleNote(evaluation, successfulRuns.size());
+            }
+            return evaluation;
         } catch (LlmException e) {
-            log.warn("评分失败（{}），降级为启发式评估：{}", e.kind(), e.getMessage());
+            // 采样调用成功、但结果里没有任何可解析的维度（例如字段名完全不符）。
+            // 这里必须走降级而不是把异常抛给调用方——否则一次模型跑偏会让整个提交回答接口失败。
+            log.warn("评分结果无可解析维度（{}），降级为启发式评估：{}", e.kind(), e.getMessage());
             return degraded(question, answerId, answer, e.getMessage(), null, now);
         }
+    }
+
+    /**
+     * 多次采样的中位数合并。
+     *
+     * <p>对离散打分（0-5 整数为主）取中位数能有效压掉离群值：实测小模型对「答非所问」的回答
+     * 会偶尔给出 0.0 与 1.25 两种结果，单次评分不可复现。
+     * 文本类字段（依据、遗漏点等）取中位数那次采样的结果，保证分数与解释来自同一次判断。
+     */
+    private Map<String, Object> medianOf(List<Map<String, Object>> runs) {
+        List<Map<String, Object>> withDimensions = runs.stream()
+                .filter(run -> !parseDimensions(run).isEmpty())
+                .toList();
+        if (withDimensions.isEmpty()) {
+            return runs.get(0);
+        }
+        Map<String, Double> medians = new LinkedHashMap<>();
+        for (String key : Prompts.DIMENSION_KEYS) {
+            List<Double> values = new ArrayList<>();
+            for (Map<String, Object> run : withDimensions) {
+                Map<String, DimensionScore> dimensions = parseDimensions(run);
+                if (dimensions.containsKey(key)) {
+                    values.add(dimensions.get(key).score());
+                }
+            }
+            if (!values.isEmpty()) {
+                java.util.Collections.sort(values);
+                medians.put(key, values.get(values.size() / 2));
+            }
+        }
+        // 选择「与各维度中位数距离最小」的那次采样作为文本来源，保证分数与解释一致
+        Map<String, Object> best = withDimensions.get(0);
+        double bestDistance = Double.MAX_VALUE;
+        for (Map<String, Object> run : withDimensions) {
+            Map<String, DimensionScore> dimensions = parseDimensions(run);
+            double distance = 0;
+            for (Map.Entry<String, Double> entry : medians.entrySet()) {
+                DimensionScore dimension = dimensions.get(entry.getKey());
+                if (dimension != null) {
+                    distance += Math.abs(dimension.score() - entry.getValue());
+                }
+            }
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = run;
+            }
+        }
+        // 用中位数覆盖该次采样的分数（文本解释沿用 best）
+        Map<String, Object> result = new LinkedHashMap<>(best);
+        Map<String, Object> rawDimensions = new LinkedHashMap<>();
+        Map<String, DimensionScore> bestDimensions = parseDimensions(best);
+        for (String key : Prompts.DIMENSION_KEYS) {
+            DimensionScore dimension = bestDimensions.get(key);
+            double score = medians.getOrDefault(key, dimension == null ? 0.0 : dimension.score());
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("score", score);
+            entry.put("reason", dimension == null ? "模型未给出打分依据" : dimension.reason());
+            rawDimensions.put(key, entry);
+        }
+        result.put("dimensionScores", rawDimensions);
+        return result;
+    }
+
+    /** 在多采样结果上标注采样次数，便于用户与排查者知道这不是单次判定。 */
+    private AnswerEvaluation withMultiSampleNote(AnswerEvaluation evaluation, int samples) {
+        String note = "（本分数为 " + samples + " 次评分的中位数，用于降低模型打分波动）";
+        return new AnswerEvaluation(evaluation.id(), evaluation.answerId(), evaluation.questionId(),
+                evaluation.sessionId(), evaluation.totalScore(), evaluation.dimensionScores(),
+                evaluation.strengths(), evaluation.missingPoints(), evaluation.corrections(),
+                evaluation.suggestedAdditions(), evaluation.referenceAnswerStructure(),
+                evaluation.evidenceWarnings(), evaluation.followUpRecommended(), evaluation.followUpFocus(),
+                evaluation.summary() + note, evaluation.degraded(), evaluation.rawModelOutput(),
+                evaluation.createdAt());
     }
 
     // ---------------------------------------------------------------- 模型结果转换

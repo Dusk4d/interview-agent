@@ -102,36 +102,50 @@ public class InterviewController {
     /**
      * 配置诊断：排查「外部配置未生效」类问题（环境变量 / 命令行参数 / 配置文件优先级）。
      *
-     * <p>返回的是与运行环境相关的信息，不含任何简历或用户数据，可安全暴露给本地使用者。
+     * <p>为什么保留这个接口：曾经出现过一个很难发现的缺陷——{@code Environment} 能解析出正确的
+     * {@code app.llm.base-url}，但注入服务的 {@code AppProperties} 却是默认值（绑定被静默放弃）。
+     * 当时只能靠临时加字段来定位。保留本接口后，同类问题可以直接对比
+     * {@code env.*}（进程环境变量）与 {@code bound.*}（最终绑定结果）来一眼定位，
+     * 不必再改代码重新打包。
+     *
+     * <p>返回内容只涉及运行环境与配置，不含任何简历或用户数据。
      */
     @GetMapping("/diagnostics/config")
     public java.util.Map<String, Object> configDiagnostics() {
         java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
         result.put("appHome", System.getProperty("app.home", "(unset)"));
         result.put("workingDir", System.getProperty("user.dir"));
-        result.put("env.INTERVIEW_LLM_BASE_URL", System.getenv("INTERVIEW_LLM_BASE_URL"));
-        result.put("env.INTERVIEW_LLM_CHAT_MODEL", System.getenv("INTERVIEW_LLM_CHAT_MODEL"));
-        result.put("env.INTERVIEW_DATA_DIR", System.getenv("INTERVIEW_DATA_DIR"));
-        result.put("env.INTERVIEW_STORAGE_MODE", System.getenv("INTERVIEW_STORAGE_MODE"));
-        result.put("resolved.app.llm.base-url", environment.getProperty("app.llm.base-url"));
-        result.put("resolved.app.llm.chat-model", environment.getProperty("app.llm.chat-model"));
-        result.put("resolved.app.storage.mode", environment.getProperty("app.storage.mode"));
-        result.put("bound.baseUrl", properties.llm().resolvedBaseUrl());
-        result.put("bound.chatModel", properties.llm().resolvedChatModel());
-        result.put("bound.disableThinking", properties.llm().shouldDisableThinking());
-        result.put("bound.raw.baseUrl", properties.llm().baseUrl());
-        result.put("bound.raw.chatModel", properties.llm().chatModel());
-        result.put("bound.propertiesClass", properties.getClass().getName());
-        try {
-            Object llm = properties.getClass().getMethod("llm").invoke(properties);
-            result.put("bound.llmClass", llm.getClass().getName());
-            result.put("bound.llmClassLoader", String.valueOf(llm.getClass().getClassLoader()));
-            result.put("bound.envPropClassLoader", String.valueOf(environment.getClass().getClassLoader()));
-        } catch (Exception e) {
-            result.put("bound.probeError", e.toString());
-        }
-        result.put("contextCount", org.springframework.context.ApplicationContext.class.isInstance(environment));
         result.put("activeProfiles", java.util.List.of(environment.getActiveProfiles()));
+
+        // 环境变量（可能是 null，说明容器/进程没有注入）
+        java.util.Map<String, Object> env = new java.util.LinkedHashMap<>();
+        for (String name : java.util.List.of("INTERVIEW_LLM_BASE_URL", "INTERVIEW_LLM_CHAT_MODEL",
+                "INTERVIEW_LLM_MAX_TOKENS", "INTERVIEW_LLM_EVAL_TEMPERATURE", "INTERVIEW_LLM_EVAL_SAMPLES",
+                "INTERVIEW_DATA_DIR", "INTERVIEW_STORAGE_MODE", "INTERVIEW_EMBEDDING_MODE",
+                "INTERVIEW_KNOWLEDGE_PATH")) {
+            env.put(name, System.getenv(name));
+        }
+        result.put("env", env);
+
+        // Spring 解析后的属性值（含占位符替换结果）
+        java.util.Map<String, Object> resolved = new java.util.LinkedHashMap<>();
+        for (String key : java.util.List.of("app.llm.base-url", "app.llm.chat-model", "app.llm.max-tokens",
+                "app.llm.eval-temperature", "app.llm.eval-samples", "app.storage.mode")) {
+            resolved.put(key, environment.getProperty(key));
+        }
+        result.put("resolved", resolved);
+
+        // 最终绑定到 AppProperties 的值：必须与上面的 resolved 一致，否则就是绑定出了问题
+        java.util.Map<String, Object> bound = new java.util.LinkedHashMap<>();
+        bound.put("baseUrl", properties.llm().resolvedBaseUrl());
+        bound.put("chatModel", properties.llm().resolvedChatModel());
+        bound.put("maxTokens", properties.llm().maxTokens());
+        bound.put("evalTemperature", properties.llm().resolvedEvalTemperature());
+        bound.put("evalSamples", properties.llm().resolvedEvalSamples());
+        bound.put("disableThinking", properties.llm().shouldDisableThinking());
+        bound.put("storageMode", properties.storage().inMemory() ? "memory" : "file");
+        result.put("bound", bound);
+
         java.util.List<String> sources = new java.util.ArrayList<>();
         for (var source : ((org.springframework.core.env.ConfigurableEnvironment) environment).getPropertySources()) {
             sources.add(source.getName());

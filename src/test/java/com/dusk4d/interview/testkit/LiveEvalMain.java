@@ -67,6 +67,7 @@ public final class LiveEvalMain {
     private static String model = "qwen3:1.7b";
     private static int consistencyRuns = 5;
     private static int questionsPerMode = 4;
+    private static int evalSamples = 1;
     private static Path outputDir = Path.of("target");
 
     private LiveEvalMain() {
@@ -82,6 +83,8 @@ public final class LiveEvalMain {
                 consistencyRuns = Integer.parseInt(arg.substring("--runs=".length()));
             } else if (arg.startsWith("--questions=")) {
                 questionsPerMode = Integer.parseInt(arg.substring("--questions=".length()));
+            } else if (arg.startsWith("--eval-samples=")) {
+                evalSamples = Integer.parseInt(arg.substring("--eval-samples=".length()));
             } else if (arg.startsWith("--out=")) {
                 outputDir = Path.of(arg.substring("--out=".length()));
             }
@@ -90,10 +93,12 @@ public final class LiveEvalMain {
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("baseUrl", baseUrl);
         report.put("model", model);
+        report.put("evalSamples", evalSamples);
         report.put("generatedAt", java.time.Instant.now().toString());
 
         System.out.println("=== 离线评测 ===");
         System.out.println("模型服务：" + baseUrl + "，模型：" + model);
+        System.out.println("评分采样次数：" + evalSamples + "（>1 表示取中位数）");
         System.out.println("评分一致性重复次数：" + consistencyRuns + "，每模式出题数：" + questionsPerMode);
 
         Harness harness = new Harness();
@@ -255,11 +260,14 @@ public final class LiveEvalMain {
         for (Case testCase : cases) {
             InterviewSession session = harness.interviewService.createSession(resume.id(), InterviewMode.PROJECT, 2);
             InterviewService.QuestionView question = harness.interviewService.nextQuestion(session.id());
+            // 用真实检索到的上下文评分：之前用固定的合成上下文会让「经历匹配度」忽高忽低，
+            // 那是评测脚本的问题，不是评分本身的波动。
+            String context = harness.contextFor(resume, question);
 
             List<Double> totals = new ArrayList<>();
             Map<String, List<Double>> dimensionValues = new LinkedHashMap<>();
             for (int i = 0; i < consistencyRuns; i++) {
-                AnswerEvaluation evaluation = harness.evaluate(question.question(), testCase.answer());
+                AnswerEvaluation evaluation = harness.evaluate(question.question(), testCase.answer(), context);
                 totals.add(evaluation.totalScore());
                 evaluation.dimensionScores().forEach((key, dimension) ->
                         dimensionValues.computeIfAbsent(dimension.label(), k -> new ArrayList<>())
@@ -302,7 +310,8 @@ public final class LiveEvalMain {
         Resume resume = harness.importFixture("resume-standard.txt");
         InterviewSession session = harness.interviewService.createSession(resume.id(), InterviewMode.PROJECT, 2);
         InterviewService.QuestionView question = harness.interviewService.nextQuestion(session.id());
-        AnswerEvaluation evaluation = harness.evaluate(question.question(), "用 Redis 加锁保证幂等。");
+        AnswerEvaluation evaluation = harness.evaluate(question.question(), "用 Redis 加锁保证幂等。",
+                harness.contextFor(resume, question));
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("hasTotalScore", evaluation.totalScore() >= 0);
@@ -482,19 +491,24 @@ public final class LiveEvalMain {
         final KnowledgeBase knowledgeBase;
         final StructuredOutputParser parser = new StructuredOutputParser(MAPPER);
 
+        /** 评测用的真实配置：带上 eval-temperature / eval-samples，否则测到的不是真实行为。 */
+        final AppProperties properties;
+
         Harness() {
-            AppProperties properties = new AppProperties(
+            AppProperties props = new AppProperties(
                     new AppProperties.Llm(baseUrl, "not-needed", model, "nomic-embed",
-                            0.3, 1600, 3000, 120000, 0, false, null),
+                            0.3, 1600, 3000, 120000, 0, false, null, 0.0, evalSamples),
                     new AppProperties.Embedding("local", 256, 8),
                     new AppProperties.Retrieval(4, 0.05, 4000, 3),
                     new AppProperties.Interview(10, 1, 8, 4000),
                     new AppProperties.Privacy(true, false),
                     new AppProperties.Storage("memory", ""),
                     new AppProperties.Parser(10 * 1024 * 1024));
+            this.properties = props;
             this.chatClient = new OpenAiCompatibleClient(baseUrl, "not-needed",
-                    properties.llm().resolvedChatModel(), 1600, 3000, 120000, MAPPER,
-                    properties.llm().shouldDisableThinking());
+                    props.llm().resolvedChatModel(), 1600, 3000, 120000, MAPPER,
+                    props.llm().shouldDisableThinking());
+            AppProperties properties = props;
 
             VectorStore vectorStore = new InMemoryVectorStore(new LocalHashEmbeddingClient(properties));
             InterviewRepository repository = new MapBackedInterviewRepository(
@@ -591,11 +605,37 @@ public final class LiveEvalMain {
             }
         }
 
-        /** 只做评分，不落库（用于一致性评测）。 */
-        AnswerEvaluation evaluate(com.dusk4d.interview.domain.InterviewQuestion question, String answer) {
-            return new AnswerEvaluator(new CountingLlmClient(), parser,
-                    new AppProperties(null, null, null, null, null, null, null), Clock.systemUTC())
-                    .evaluate(question, answer, "简历片段：FinanceScore 项目\n个人职责：负责检索链路", List.of());
+        /** 与业务一致的评测器配置，供一致性评测复用（此前这里用了空属性，等于没测到温度设置）。 */
+        AnswerEvaluation evaluate(com.dusk4d.interview.domain.InterviewQuestion question, String answer,
+                                  String context) {
+            return new AnswerEvaluator(new CountingLlmClient(), parser, properties, Clock.systemUTC())
+                    .evaluate(question, answer, context, List.of());
+        }
+
+        /** 用真实检索到的简历片段构造评分上下文（与业务链路一致）。 */
+        String contextFor(Resume resume, InterviewService.QuestionView question) {
+            List<ResumeFact> facts;
+            if (!question.question().sourceIds().isEmpty()) {
+                facts = resume.facts().stream()
+                        .filter(fact -> question.question().sourceIds().contains(fact.id()))
+                        .toList();
+            } else {
+                facts = List.of();
+            }
+            if (facts.isEmpty()) {
+                facts = resume.facts().stream()
+                        .filter(fact -> fact.type() == FactType.PROJECT)
+                        .findFirst()
+                        .map(List::of)
+                        .orElse(List.of());
+            }
+            StringBuilder sb = new StringBuilder();
+            int index = 1;
+            for (ResumeFact fact : facts) {
+                sb.append('[').append(index++).append("] 简历片段：").append(fact.label()).append('\n')
+                        .append(fact.content()).append('\n');
+            }
+            return sb.toString().strip();
         }
     }
 }

@@ -73,7 +73,7 @@ class MvpAcceptanceTest {
     private static final Instant FIXED = Instant.parse("2024-06-01T10:00:00Z");
     private static final AppProperties PROPERTIES = new AppProperties(
             new AppProperties.Llm("http://127.0.0.1:1/v1", "test", "mock", "mock-embed",
-                    0.3, 900, 400, 800, 0, false, null),
+                    0.3, 900, 400, 800, 0, false, null, null, null),
             new AppProperties.Embedding("local", 128, 8),
             new AppProperties.Retrieval(4, 0.05, 4000, 3),
             new AppProperties.Interview(6, 1, 8, 4000),

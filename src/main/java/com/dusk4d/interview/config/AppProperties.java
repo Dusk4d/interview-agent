@@ -55,11 +55,28 @@ public record AppProperties(
             int readTimeoutMs,
             int maxRetries,
             boolean probeOnStartup,
-            Boolean disableThinking
+            Boolean disableThinking,
+            Double evalTemperature,
+            Integer evalSamples
     ) {
         /** 默认值（不配置任何 app.llm.* 时使用）；唯一构造入口，避免出现第二个构造器。 */
         public static Llm defaults() {
-            return new Llm(null, null, null, null, 0.3, 1600, 3000, 45000, 0, true, null);
+            return new Llm(null, null, null, null, 0.3, 1600, 3000, 45000, 0, true, null, null, null);
+        }
+
+        /**
+         * 评分采样次数（取中位数以压制方差）。
+         *
+         * <p>为什么需要：即使把温度降到 0.0 并固定分档标准，小模型对「答非所问」这类边界
+         * 回答仍会偶尔给出明显偏离的分数（实测同一回答出现 0.0 与 1.25）。
+         * 对这种离散打分，多次采样取中位数能把离群值压掉，代价是评分耗时与调用量成倍增加。
+         * 默认 1（单次评分，最省）；对评分稳定性要求高时可设为 3，或设为奇数以获得真正的中位数。
+         * 取值范围 1~5；偶数会被向上取整为奇数。
+         */
+        public int resolvedEvalSamples() {
+            int samples = evalSamples == null ? 1 : evalSamples;
+            samples = Math.max(1, Math.min(5, samples));
+            return samples % 2 == 0 ? samples + 1 : samples;
         }
 
         public String resolvedBaseUrl() {
@@ -76,6 +93,20 @@ public record AppProperties(
 
         public String resolvedApiKey() {
             return apiKey == null || apiKey.isBlank() ? "not-needed" : apiKey.trim();
+        }
+
+        /**
+         * 评分时的采样温度。
+         *
+         * <p>为什么评分要单独用一个温度：出题需要一点多样性（避免每次都是同一个问法），
+         * 但评分需要的是<b>可复现</b>——同一个回答重复评分应当得到接近的分数。
+         * 实测默认 0.3 温度下，同一份回答重复评分的总分极差可达 1.3 分，
+         * 这对「评分可解释、可复现」的核心主张是硬伤。
+         * 因此评分默认使用 0.0（贪心解码），出题仍用 {@code temperature}。
+         * 可用 {@code app.llm.eval-temperature} 覆盖。
+         */
+        public double resolvedEvalTemperature() {
+            return evalTemperature == null ? 0.0 : Math.max(0.0, Math.min(1.0, evalTemperature));
         }
 
         /**
