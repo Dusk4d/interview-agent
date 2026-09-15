@@ -10,7 +10,12 @@ import com.dusk4d.interview.storage.InterviewRepository;
 import com.dusk4d.interview.storage.MapBackedInterviewRepository;
 import com.dusk4d.interview.storage.Store;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
 import java.util.Comparator;
@@ -19,7 +24,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 启动期索引重建测试。
+ * 启动期检索索引重建测试。
  *
  * <p>背景：向量库在内存中，简历在磁盘上。如果不重建索引，重启后项目面检索会全部为空
  * （只能走「回退到事实原文」的降级路径），来源引用也会消失。这里验证重建逻辑确实把
@@ -79,6 +84,85 @@ class VectorIndexInitializerTest {
         new VectorIndexInitializer(repository, vectorStore).run(null);
 
         assertThat(vectorStore.size()).isEqualTo(1);
+    }
+
+    /**
+     * 配置绑定验证（真实 Spring 上下文）。
+     *
+     * <p>存在的理由：真实进程回归时发现 {@code Environment.getProperty("app.llm.base-url")}
+     * 能解析出正确值，但注入到服务里的 {@code AppProperties} 全是默认值——「配置源正确、绑定结果错误」。
+     * 根因是 {@code AppProperties.Llm} 当时多了一个便捷构造器，绑定器无法确定规范构造器，
+     * 于是静默放弃绑定。这类问题在纯单元测试里看不出来（手动 Binder 使用规范构造器），
+     * 因此必须有这样一组启动真实上下文的断言守住它，同时覆盖环境变量/命令行参数的最终生效结果。
+     */
+    @Nested
+    @SpringBootTest
+    @ActiveProfiles("test")
+    @TestPropertySource(properties = {
+            "app.llm.base-url=http://127.0.0.1:11434/v1",
+            "app.llm.chat-model=qwen3:1.7b",
+            "app.llm.disable-thinking=true",
+            "app.interview.max-questions=3",
+            "app.retrieval.top-k=7",
+            "app.storage.mode=memory",
+            "app.privacy.mask-name=true"
+    })
+    @DisplayName("AppProperties 绑定真实 Spring 上下文")
+    class BindingTest {
+
+        @Autowired
+        AppProperties properties;
+
+        @Autowired
+        org.springframework.core.env.Environment environment;
+
+        @Test
+        @DisplayName("外部属性必须绑定到 AppProperties，而不是静默保留默认值")
+        void externalPropertiesAreBound() {
+            // 配置源本身可解析
+            assertThat(environment.getProperty("app.llm.base-url")).isEqualTo("http://127.0.0.1:11434/v1");
+
+            // 关键断言：绑定结果必须与配置源一致
+            assertThat(properties.llm().baseUrl())
+                    .as("绑定结果必须与配置源一致（曾因多构造器导致绑定被静默放弃）")
+                    .isEqualTo("http://127.0.0.1:11434/v1");
+            assertThat(properties.llm().chatModel()).isEqualTo("qwen3:1.7b");
+            assertThat(properties.llm().disableThinking()).isTrue();
+            assertThat(properties.llm().shouldDisableThinking()).isTrue();
+            assertThat(properties.interview().maxQuestions()).isEqualTo(3);
+            assertThat(properties.retrieval().topK()).isEqualTo(7);
+            assertThat(properties.storage().mode()).isEqualTo("memory");
+            assertThat(properties.storage().inMemory()).isTrue();
+            assertThat(properties.privacy().maskName()).isTrue();
+        }
+
+        @Test
+        @DisplayName("每个子配置块都必须有具体实例，不能是默认兜底产生的空壳")
+        void allSectionsAreBound() {
+            assertThat(properties.llm()).isNotNull();
+            assertThat(properties.embedding()).isNotNull();
+            assertThat(properties.retrieval()).isNotNull();
+            assertThat(properties.interview()).isNotNull();
+            assertThat(properties.privacy()).isNotNull();
+            assertThat(properties.storage()).isNotNull();
+            assertThat(properties.parser()).isNotNull();
+            // 未显式配置的字段应保留配置文件中的值，而不是 null
+            assertThat(properties.llm().maxTokens()).isEqualTo(1600);
+            assertThat(properties.embedding().mode()).isEqualTo("local");
+        }
+
+        @Test
+        @DisplayName("每个配置 record 只应有一个构造器（多构造器会让绑定静默失效）")
+        void recordsHaveSingleConstructor() {
+            for (Class<?> type : List.of(AppProperties.class, AppProperties.Llm.class,
+                    AppProperties.Embedding.class, AppProperties.Retrieval.class,
+                    AppProperties.Interview.class, AppProperties.Privacy.class,
+                    AppProperties.Storage.class, AppProperties.Parser.class)) {
+                assertThat(type.getDeclaredConstructors())
+                        .as("%s 不应定义额外构造器，否则 Spring 绑定器无法确定规范构造器", type.getSimpleName())
+                        .hasSize(1);
+            }
+        }
     }
 
     // ---------------------------------------------------------------- 测试替身

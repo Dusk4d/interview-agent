@@ -32,6 +32,8 @@ import java.time.Duration;
 public class OpenAiCompatibleClient implements LlmClient {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleClient.class);
+    /** 混合推理模型（Qwen3 等）的思考链抑制标记，Ollama 兼容。 */
+    private static final String NO_THINK_SUFFIX = " /no_think";
 
     private final String baseUrl;
     private final String apiKey;
@@ -40,15 +42,18 @@ public class OpenAiCompatibleClient implements LlmClient {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final Duration readTimeout;
+    private final boolean disableThinking;
 
     public OpenAiCompatibleClient(String baseUrl, String apiKey, String model, int maxTokens,
-                                  int connectTimeoutMs, int readTimeoutMs, ObjectMapper objectMapper) {
+                                  int connectTimeoutMs, int readTimeoutMs, ObjectMapper objectMapper,
+                                  boolean disableThinking) {
         this.baseUrl = trimTrailingSlash(baseUrl);
         this.apiKey = apiKey;
         this.model = model;
         this.maxTokens = maxTokens;
         this.readTimeout = Duration.ofMillis(Math.max(1000, readTimeoutMs));
         this.objectMapper = objectMapper;
+        this.disableThinking = disableThinking;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.max(500, connectTimeoutMs)))
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -107,6 +112,10 @@ public class OpenAiCompatibleClient implements LlmClient {
         root.put("temperature", request.temperature());
         root.put("max_tokens", request.maxTokens() > 0 ? request.maxTokens() : maxTokens);
         root.put("stream", false);
+        // Ollama 原生参数：显式关闭思考链（其它兼容服务会忽略未知字段）
+        if (disableThinking) {
+            root.put("think", false);
+        }
         ArrayNode messages = root.putArray("messages");
         if (request.systemPrompt() != null && !request.systemPrompt().isBlank()) {
             ObjectNode system = messages.addObject();
@@ -115,9 +124,11 @@ public class OpenAiCompatibleClient implements LlmClient {
         }
         ObjectNode user = messages.addObject();
         user.put("role", "user");
-        user.put("content", request.userPrompt() == null ? "" : request.userPrompt());
+        user.put("content", withThinkingSuppressed(request.userPrompt()));
         if (request.expectsJson()) {
-            // LM Studio / Ollama / OpenAI 均支持 response_format=json_object
+            // LM Studio / Ollama / OpenAI 均支持 response_format=json_object。
+            // 注意：实测 Ollama 在 json_object 模式下仍会先输出思考内容，
+            // 因此必须同时用 /no_think 抑制，否则正文可能为空。
             root.putObject("response_format").put("type", "json_object");
         }
         try {
@@ -125,6 +136,15 @@ public class OpenAiCompatibleClient implements LlmClient {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw LlmException.badResponse("构造模型请求失败：" + e.getMessage(), e);
         }
+    }
+
+    /** 对混合推理模型追加 {@code /no_think}，避免思考链吃掉结构化输出预算。 */
+    private String withThinkingSuppressed(String prompt) {
+        String text = prompt == null ? "" : prompt;
+        if (!disableThinking || text.contains("/no_think")) {
+            return text;
+        }
+        return text + NO_THINK_SUFFIX;
     }
 
     private LlmResponse parse(String rawBody, long elapsedMs) {
@@ -148,15 +168,29 @@ public class OpenAiCompatibleClient implements LlmClient {
         }
         JsonNode message = choices.get(0).path("message");
         String content = message.path("content").asText("");
-        if (content.isBlank() && message.has("reasoning_content")) {
-            content = message.path("reasoning_content").asText("");
+        String reasoning = message.path("reasoning_content").asText("");
+        String finishReason = choices.get(0).path("finish_reason").asText("-");
+
+        if (content.isBlank() && !reasoning.isBlank()) {
+            // 思考内容不能当作正文使用：它不是结构化结果，直接解析只会污染下游。
+            // 这里给出可操作的诊断，让用户知道该关掉 thinking 或换模型。
+            throw LlmException.badResponse(
+                    "模型只输出了思考过程、没有输出正文（finish_reason=" + finishReason + "）。"
+                            + (disableThinking
+                                    ? "已尝试关闭思考链仍失败，建议换用非推理模型或调大 app.llm.max-tokens。"
+                                    : "请设置 app.llm.disable-thinking=true 或改用非推理模型。"), null);
         }
+        if (content.isBlank()) {
+            throw LlmException.badResponse(
+                    "模型返回空正文（finish_reason=" + finishReason + "）。"
+                            + ("length".equals(finishReason)
+                                    ? "输出被 max-tokens 截断，建议调大 app.llm.max-tokens。"
+                                    : "请确认模型名称是否正确、服务是否已加载该模型。"), null);
+        }
+
         JsonNode usage = root.path("usage");
         int promptTokens = usage.path("prompt_tokens").asInt(0);
         int outputTokens = usage.path("completion_tokens").asInt(0);
-        if (content.isBlank()) {
-            log.debug("模型返回空内容，finish_reason={}", choices.get(0).path("finish_reason").asText("-"));
-        }
         return new LlmResponse(content, root.path("model").asText(model), elapsedMs, promptTokens, outputTokens);
     }
 

@@ -122,18 +122,29 @@ public final class Prompts {
         }
         sb.append("""
 
-                【输出 JSON 字段】
-                dimensionScores: 对象，键为 technical_correctness / completeness / experience_match / structure，
-                                 值为 {"score": 0-5 的数字, "reason": "打分依据"}
-                strengths: 字符串数组，回答中可保留的内容（没有就给空数组）
-                missingPoints: 字符串数组，遗漏的关键点
-                corrections: 字符串数组，技术错误或需要纠正的表述
-                suggestedAdditions: 字符串数组，建议补充的信息
-                referenceAnswerStructure: 字符串，参考回答的结构（不要写成完整答案）
-                evidenceWarnings: 字符串数组，回答中缺少证据的强主张
-                followUpRecommended: 布尔值，是否建议追问
-                followUpFocus: 字符串，若要追问，追问什么
-                summary: 字符串，两句话以内的总评
+                【输出 JSON 字段】必须严格按下面的结构返回（字段名不可改动）：
+                {
+                  "dimensionScores": {
+                    "technical_correctness": { "score": 0-5 的数字, "reason": "打分依据" },
+                    "completeness":          { "score": 0-5 的数字, "reason": "打分依据" },
+                    "experience_match":      { "score": 0-5 的数字, "reason": "打分依据" },
+                    "structure":             { "score": 0-5 的数字, "reason": "打分依据" }
+                  },
+                  "strengths": ["可保留的内容"],
+                  "missingPoints": ["遗漏的关键点"],
+                  "corrections": ["需要纠正的表述"],
+                  "suggestedAdditions": ["建议补充的信息"],
+                  "referenceAnswerStructure": "参考回答的结构",
+                  "evidenceWarnings": ["缺少证据的强主张"],
+                  "followUpRecommended": true 或 false,
+                  "followUpFocus": "若要追问，追问什么",
+                  "summary": "两句话以内的总评"
+                }
+
+                注意：
+                - dimensionScores 必须是「对象」而不是数组，四个键一个都不能少；
+                - score 使用 0-5 分制（不要用 10 分制或百分制）；
+                - 每个维度的 reason 必须写清楚打分依据，不能只给分数。
                 """);
         return sb.toString();
     }

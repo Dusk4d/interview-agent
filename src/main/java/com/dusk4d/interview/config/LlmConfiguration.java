@@ -44,7 +44,12 @@ public class LlmConfiguration {
                 llm.maxTokens(),
                 llm.connectTimeoutMs(),
                 llm.readTimeoutMs(),
-                objectMapper);
+                objectMapper,
+                llm.shouldDisableThinking());
+        if (llm.shouldDisableThinking()) {
+            log.info("检测到推理型模型（{}），已自动关闭思考链（/no_think）：结构化任务只需正文输出。",
+                    llm.resolvedChatModel());
+        }
         if (llm.probeOnStartup()) {
             boolean ok = client.available();
             if (ok) {

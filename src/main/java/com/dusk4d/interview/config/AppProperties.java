@@ -3,6 +3,7 @@ package com.dusk4d.interview.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 应用配置聚合。所有外部依赖（模型、存储、检索、隐私）都在这里显式声明，
@@ -20,7 +21,10 @@ public record AppProperties(
 ) {
 
     public AppProperties {
-        llm = llm == null ? new Llm(null, null, null, null, 0.3, 1600, 3000, 45000, 0, true) : llm;
+        // 注意：这里只把缺失的整块配置替换为默认块，不做「部分字段兜底」。
+        // 每个子 record 同样只保留规范构造器——Spring 的绑定器一旦发现多个构造器
+        // 就会静默放弃绑定（见 Llm 的说明）。
+        llm = llm == null ? Llm.defaults() : llm;
         embedding = embedding == null ? new Embedding(null, 256, 16) : embedding;
         retrieval = retrieval == null ? new Retrieval(5, 0.08, 4000, 4) : retrieval;
         interview = interview == null ? new Interview(8, 1, 8, 4000) : interview;
@@ -29,7 +33,17 @@ public record AppProperties(
         parser = parser == null ? new Parser(10 * 1024 * 1024) : parser;
     }
 
-    /** 模型服务（OpenAI 兼容协议：LM Studio / Ollama / DeepSeek / 通义）。 */
+    /**
+     * 模型服务（OpenAI 兼容协议：LM Studio / Ollama / DeepSeek / 通义）。
+     *
+     * <p><b>重要约束：这个 record 只能有规范构造器（canonical constructor）。</b>
+     * 曾经为了构造方便加过一个 10 参数的便捷构造器，结果是 Spring 的绑定器无法确定
+     * 该用哪个构造器，于是**静默放弃绑定、保留字段默认值**——表现为
+     * {@code Environment} 能取到正确配置，但注入到服务里的 {@code AppProperties} 全是 null。
+     * 这个缺陷在纯单元测试里看不出来（手动 Binder 用的是规范构造器），
+     * 只有启动真实上下文才会暴露，因此 {@code VectorIndexInitializerTest.BindingTest} 专门守住它。
+     * 需要默认值时请用 {@link #defaults()} 工厂方法，不要新增构造器。
+     */
     public record Llm(
             String baseUrl,
             String apiKey,
@@ -40,8 +54,14 @@ public record AppProperties(
             int connectTimeoutMs,
             int readTimeoutMs,
             int maxRetries,
-            boolean probeOnStartup
+            boolean probeOnStartup,
+            Boolean disableThinking
     ) {
+        /** 默认值（不配置任何 app.llm.* 时使用）；唯一构造入口，避免出现第二个构造器。 */
+        public static Llm defaults() {
+            return new Llm(null, null, null, null, 0.3, 1600, 3000, 45000, 0, true, null);
+        }
+
         public String resolvedBaseUrl() {
             return baseUrl == null || baseUrl.isBlank() ? "http://127.0.0.1:1234/v1" : baseUrl.trim();
         }
@@ -56,6 +76,25 @@ public record AppProperties(
 
         public String resolvedApiKey() {
             return apiKey == null || apiKey.isBlank() ? "not-needed" : apiKey.trim();
+        }
+
+        /**
+         * 是否需要抑制「思考链」输出。
+         *
+         * <p>背景：Qwen3 / R1 这类混合推理模型默认先输出一大段思考内容。在只有一两千 token
+         * 预算的结构化任务里，思考会吃掉全部额度并导致 {@code content} 为空
+         * （本机实测 qwen3:1.7b 一个短问题要 6~10 秒且正文可能为空）。
+         * 我们只需要结构化结果，因此对已知推理模型默认追加 {@code /no_think}。
+         * 显式配置 {@code app.llm.disable-thinking} 时以配置为准。
+         */
+        public boolean shouldDisableThinking() {
+            if (disableThinking != null) {
+                return disableThinking;
+            }
+            String model = resolvedChatModel().toLowerCase(Locale.ROOT);
+            return model.startsWith("qwen3") || model.contains("qwq")
+                    || model.startsWith("deepseek-r1") || model.contains("reasoning")
+                    || model.startsWith("magistral") || model.contains("thinking");
         }
     }
 

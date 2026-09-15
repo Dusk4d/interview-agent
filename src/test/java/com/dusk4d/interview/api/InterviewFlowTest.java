@@ -61,7 +61,7 @@ class InterviewFlowTest {
     void setUp() {
         AppProperties properties = new AppProperties(
                 new AppProperties.Llm("http://127.0.0.1:1/v1", "test", "mock", "mock-embed",
-                        0.3, 800, 500, 1000, 0, false),
+                        0.3, 800, 500, 1000, 0, false, null),
                 new AppProperties.Embedding("local", 128, 8),
                 new AppProperties.Retrieval(4, 0.05, 4000, 3),
                 new AppProperties.Interview(6, 1, 8, 4000),

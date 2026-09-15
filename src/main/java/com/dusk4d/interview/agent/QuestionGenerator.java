@@ -38,8 +38,18 @@ public class QuestionGenerator {
 
     private static final Logger log = LoggerFactory.getLogger(QuestionGenerator.class);
 
-    private static final List<String> SCHEMA_FIELDS =
-            List.of("type", "difficulty", "question", "intent", "focus", "followUpPlan");
+    /**
+     * 结构化输出的必需字段。
+     *
+     * <p>只把「没有它就无法出题」的字段列为必需：{@code question} 是正文，
+     * {@code type/difficulty} 决定后续难度推进与题型分布。
+     * {@code intent} / {@code focus} / {@code followUpPlan} 缺失时都有安全默认值，
+     * 因此不算必需——小模型（实测 qwen3:1.7b）常漏掉 followUpPlan，
+     * 若把它列为必需，整道题会被判定失败并降级为模板出题，反而降低质量。
+     */
+    private static final List<String> REQUIRED_FIELDS = List.of("question", "type", "difficulty");
+    private static final List<String> SCHEMA_FIELDS = List.of("type", "difficulty", "question", "intent",
+            "focus", "followUpPlan");
 
     private final LlmClient llmClient;
     private final StructuredOutputParser parser;
@@ -105,7 +115,7 @@ public class QuestionGenerator {
         try {
             var response = llmClient.chat(LlmRequest.structured(Prompts.QUESTION_SYSTEM, userPrompt,
                     "question", SCHEMA_FIELDS, properties.llm().temperature(), properties.llm().maxTokens()));
-            Map<String, Object> parsed = parser.parseObject(response.content(), SCHEMA_FIELDS);
+            Map<String, Object> parsed = parser.parseObject(response.content(), REQUIRED_FIELDS);
             return toPlan(parsed, mode, stage, difficulty, context, false);
         } catch (LlmException e) {
             log.warn("问题生成失败（{}），已降级为模板出题：{}", e.kind(), e.getMessage());
@@ -124,7 +134,7 @@ public class QuestionGenerator {
         try {
             var response = llmClient.chat(LlmRequest.structured(Prompts.FOLLOW_UP_SYSTEM, userPrompt,
                     "followup", SCHEMA_FIELDS, properties.llm().temperature(), properties.llm().maxTokens()));
-            Map<String, Object> parsed = parser.parseObject(response.content(), SCHEMA_FIELDS);
+            Map<String, Object> parsed = parser.parseObject(response.content(), REQUIRED_FIELDS);
             QuestionPlan plan = new QuestionPlan(
                     QuestionType.FOLLOW_UP,
                     Difficulty.parse(StructuredOutputParser.string(parsed, "difficulty", "HARD")),

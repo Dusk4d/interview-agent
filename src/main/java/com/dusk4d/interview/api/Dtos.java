@@ -213,6 +213,10 @@ public final class Dtos {
             String llmProvider,
             String llmModel,
             boolean llmAvailable,
+            /** 实际生效的模型服务地址（用于排查配置未生效的问题）。 */
+            String llmBaseUrl,
+            /** 推理型模型是否已自动关闭思考链。 */
+            boolean thinkingDisabled,
             String embeddingProvider,
             int embeddingDimension,
             int knownChunks,

@@ -55,6 +55,7 @@ public class InterviewController {
     private final EmbeddingClient embeddingClient;
     private final DocumentRetriever retriever;
     private final AppProperties properties;
+    private final org.springframework.core.env.Environment environment;
 
     public InterviewController(ResumeImportService resumeService,
                                InterviewService interviewService,
@@ -63,7 +64,8 @@ public class InterviewController {
                                LlmClient llmClient,
                                EmbeddingClient embeddingClient,
                                DocumentRetriever retriever,
-                               AppProperties properties) {
+                               AppProperties properties,
+                               org.springframework.core.env.Environment environment) {
         this.resumeService = resumeService;
         this.interviewService = interviewService;
         this.knowledgeBase = knowledgeBase;
@@ -72,6 +74,7 @@ public class InterviewController {
         this.embeddingClient = embeddingClient;
         this.retriever = retriever;
         this.properties = properties;
+        this.environment = environment;
     }
 
     // ---------------------------------------------------------------- 系统状态
@@ -84,6 +87,8 @@ public class InterviewController {
                 llmClient.provider(),
                 llmClient.modelName(),
                 llmClient.available(),
+                properties.llm().resolvedBaseUrl(),
+                properties.llm().shouldDisableThinking(),
                 embeddingClient.provider(),
                 embeddingClient.dimension(),
                 vectorStore.size(),
@@ -92,6 +97,47 @@ public class InterviewController {
                 interviewService.listSessions().size(),
                 properties.storage().inMemory() ? "memory" : "file",
                 knowledgeBase.topics());
+    }
+
+    /**
+     * 配置诊断：排查「外部配置未生效」类问题（环境变量 / 命令行参数 / 配置文件优先级）。
+     *
+     * <p>返回的是与运行环境相关的信息，不含任何简历或用户数据，可安全暴露给本地使用者。
+     */
+    @GetMapping("/diagnostics/config")
+    public java.util.Map<String, Object> configDiagnostics() {
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("appHome", System.getProperty("app.home", "(unset)"));
+        result.put("workingDir", System.getProperty("user.dir"));
+        result.put("env.INTERVIEW_LLM_BASE_URL", System.getenv("INTERVIEW_LLM_BASE_URL"));
+        result.put("env.INTERVIEW_LLM_CHAT_MODEL", System.getenv("INTERVIEW_LLM_CHAT_MODEL"));
+        result.put("env.INTERVIEW_DATA_DIR", System.getenv("INTERVIEW_DATA_DIR"));
+        result.put("env.INTERVIEW_STORAGE_MODE", System.getenv("INTERVIEW_STORAGE_MODE"));
+        result.put("resolved.app.llm.base-url", environment.getProperty("app.llm.base-url"));
+        result.put("resolved.app.llm.chat-model", environment.getProperty("app.llm.chat-model"));
+        result.put("resolved.app.storage.mode", environment.getProperty("app.storage.mode"));
+        result.put("bound.baseUrl", properties.llm().resolvedBaseUrl());
+        result.put("bound.chatModel", properties.llm().resolvedChatModel());
+        result.put("bound.disableThinking", properties.llm().shouldDisableThinking());
+        result.put("bound.raw.baseUrl", properties.llm().baseUrl());
+        result.put("bound.raw.chatModel", properties.llm().chatModel());
+        result.put("bound.propertiesClass", properties.getClass().getName());
+        try {
+            Object llm = properties.getClass().getMethod("llm").invoke(properties);
+            result.put("bound.llmClass", llm.getClass().getName());
+            result.put("bound.llmClassLoader", String.valueOf(llm.getClass().getClassLoader()));
+            result.put("bound.envPropClassLoader", String.valueOf(environment.getClass().getClassLoader()));
+        } catch (Exception e) {
+            result.put("bound.probeError", e.toString());
+        }
+        result.put("contextCount", org.springframework.context.ApplicationContext.class.isInstance(environment));
+        result.put("activeProfiles", java.util.List.of(environment.getActiveProfiles()));
+        java.util.List<String> sources = new java.util.ArrayList<>();
+        for (var source : ((org.springframework.core.env.ConfigurableEnvironment) environment).getPropertySources()) {
+            sources.add(source.getName());
+        }
+        result.put("propertySources", sources);
+        return result;
     }
 
     // ---------------------------------------------------------------- 简历
