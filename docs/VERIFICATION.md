@@ -2,7 +2,7 @@
 
 本文说明「怎么证明系统能用」，以及哪些结论已经实测、哪些仍然待测。
 
-## 一、自动化测试（163 项）
+## 一、自动化测试（169 项）
 
 ```bat
 powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
@@ -37,8 +37,9 @@ powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
 | 模型客户端 | `OpenAiCompatibleClientTest` | 10 | 思考链抑制边界、**HTTP/1.1 强制**、**response_format 协商与降级判定**、请求体构造 |
 | 离线评测集 | `EvalCorpusTest` | 4 | 4 份简历的解析召回（人工确认字段不丢）、极简简历不编造、**三档人工回答的评分排序单调性**、评测集自洽 |
 | 模板出题 | `MockLlmClientQuestionTest` | 8 | 离线模板出题必须点名真实项目（不得退化成「该项目」）、提示语不得漏进题目正文、题序轮换不重复、题型标签与题目内容一致 |
+| 模型连通性诊断 | `LlmDiagnosticsTest` | 6 | 地址可达+模型名匹配才算可用；模型名不存在要点名并给出该改成什么；服务端不返回模型列表时不误判；地址不通要说明探测了哪里、本机该查哪些端口（用真实本地 HTTP 假服务验证） |
 
-合计 **163 次测试执行，全部通过**。
+合计 **169 次测试执行，全部通过**。
 
 ### 验收标准对照（`MvpAcceptanceTest`）
 
@@ -296,6 +297,48 @@ java.lang.NoClassDefFoundError: com/fasterxml/jackson/databind/ObjectMapper
 
 验证：`.cmd` 与 `.ps1` 两个冒烟入口在 mock 模式下均 `ALL SMOKE CHECKS PASSED (26/26)`
 （修复前两个入口分别失败于 Jackson 缺失与 `.encoding=UTF-8`）。
+
+### 6.10 「模型未连接」说不出原因（用户实际反馈）
+
+用户反馈「我后台开着 Ollama，为什么还显示模型服务未连接」。实测复现并确认这不是 Ollama 的问题：
+
+```text
+llmProvider   = openai-compatible
+llmBaseUrl    = http://127.0.0.1:1234/v1      ← 默认值指向 LM Studio
+llmModel      = qwen2.5-7b-instruct           ← Ollama 里只有 qwen3:1.7b
+llmAvailable  = false
+```
+
+即：默认配置找的是 LM Studio 的 1234，而用户只开了 Ollama 的 11434；界面上只有一句
+「模型未连接（可降级运行）」，**既不说是哪个地址连不上，也不说服务端有哪些模型可用**，
+用户只能猜。附带发现的第二个坑更隐蔽：旧逻辑只判断 `/v1/models` 是否返回 2xx，
+所以「地址对了但模型名写错」时圆点是绿的，而每次真实调用都 404 并静默降级。
+
+修复（新增 `LlmDiagnostics`）：
+
+1. `llmAvailable` 现在同时要求「地址可达」与「模型名存在于服务端模型列表」；
+   服务端不返回可解析列表时退化为只校验可达，避免误判。
+2. `/api/health` 新增 `llmStatus` / `llmHint` / `llmAvailableModels`，把结论与**可执行的下一步**直接给出；
+   配置地址不通时依次探测 11434 / 1234 / 8000 / 8080，命中就点名报出。
+3. 前端把原因和建议显示在黄条里，状态条悬停可见详情，点一下即可重新探测（不必刷页）。
+
+实测（默认配置 + 本机 Ollama 正在运行）：
+
+```text
+llmStatus = 当前配置的地址 http://127.0.0.1:1234/v1 连不上（模型 qwen2.5-7b-instruct），
+            但检测到 Ollama 正在 http://127.0.0.1:11434/v1 提供服务，可用模型：qwen3:1.7b
+llmHint   = 把地址指过去即可：set INTERVIEW_LLM_BASE_URL=http://127.0.0.1:11434/v1
+            与 set INTERVIEW_LLM_CHAT_MODEL=qwen3:1.7b；或直接用 scripts\start.cmd ollama 一键配好，然后重启服务。
+```
+
+按提示改配置后实测（真实模型，同一份简历）：
+
+| 指标 | 结果 |
+|---|---|
+| `llmAvailable` | `true`，`llmStatus` =「已连接 http://127.0.0.1:11434/v1，模型 qwen3:1.7b 可用」 |
+| 出题 | 14s，`type=PROJECT_TECH`，`degraded=false`，问题为「Kafka 事务消息如何保证订单中台重构后的最终一致性？」——回指简历里真实存在的项目 |
+| 评分 | 32s，总分 5.0，4 个维度齐全，`degraded=false`，`nextAction=FOLLOW_UP` |
+| 冒烟 | mock 实例与真实模型实例均 `ALL SMOKE CHECKS PASSED (26/26)` |
 
 ## 七、待测指标（**不要写进简历当作结论**）
 

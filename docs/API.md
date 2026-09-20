@@ -43,7 +43,12 @@ Base URL：`http://127.0.0.1:8090`
   "version": "0.1.0",
   "llmProvider": "openai-compatible",
   "llmModel": "qwen2.5-7b-instruct",
-  "llmAvailable": true,
+  "llmAvailable": false,
+  "llmBaseUrl": "http://127.0.0.1:1234/v1",
+  "llmStatus": "当前配置的地址 http://127.0.0.1:1234/v1 连不上（模型 qwen2.5-7b-instruct），但检测到 Ollama 正在 http://127.0.0.1:11434/v1 提供服务，可用模型：qwen3:1.7b",
+  "llmHint": "把地址指过去即可：set INTERVIEW_LLM_BASE_URL=http://127.0.0.1:11434/v1 与 set INTERVIEW_LLM_CHAT_MODEL=qwen3:1.7b；或直接用 scripts\\start.cmd ollama 一键配好，然后重启服务。",
+  "llmAvailableModels": ["qwen3:1.7b"],
+  "thinkingDisabled": false,
   "embeddingProvider": "local-hash",
   "embeddingDimension": 256,
   "knownChunks": 31,
@@ -56,6 +61,18 @@ Base URL：`http://127.0.0.1:8090`
 ```
 
 `llmAvailable=false` 时系统仍可工作：出题与评分走降级路径并在响应中标注。
+
+| 字段 | 含义 |
+|---|---|
+| `llmBaseUrl` | **实际生效**的服务地址（不是配置文件的默认值），用于排查「环境变量没生效」 |
+| `llmStatus` | 连通性结论：探测了哪个地址、模型名是否存在于服务端模型列表 |
+| `llmHint` | 不可用时的修复建议（该设哪个环境变量 / 该用哪个启动命令），可用时为 `null` |
+| `llmAvailableModels` | 服务端 `/v1/models` 实际返回的模型名，拿不到时为空数组 |
+
+> 为什么 `llmAvailable` 会把「模型名不存在」也算作不可用：只要端口通就报「已连接」的话，
+> 模型名写错时圆点是绿的、每次调用却都在降级，用户只会觉得「分数怎么怪怪的」。
+> 服务端不返回可解析的模型列表时（少数兼容实现），退化为只校验可达，不会误判为不可用。
+
 
 ---
 

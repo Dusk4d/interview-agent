@@ -189,11 +189,11 @@ curl "http://127.0.0.1:8090/api/interviews/<sessionId>/report.md"
 
 | 现象 | 原因与处理 |
 |---|---|
-| 打开页面右上角是黄点「模型未连接」 | 模型服务没起或模型名不对。Mock 模式可忽略；真模型请检查 `lms ps` / `ollama list`，并让 `INTERVIEW_LLM_CHAT_MODEL` 与之一致 |
+| 打开页面右上角是黄点「模型未连接」 | **先看提示**：鼠标悬停右上角状态条（或看右下角弹出的黄条），里面会写明「当前配置的是哪个地址、连不上、本机哪儿有服务」。最常见的两种：① 只开了 Ollama，但应用默认找的是 LM Studio 的 `1234` → 改用 `scripts\start.cmd ollama`；② 地址对了但模型名不在服务端列表里 → 提示会列出可用模型名，设给 `INTERVIEW_LLM_CHAT_MODEL`。改完环境变量要**重启服务**；只是模型刚启动好，点一下状态条即可重新探测 |
 | LM Studio 显示未连接，但 `lms ps` 有模型 | 需要 `lms server start`（仅加载模型不会开服务） |
 | 出题提示「已使用模板出题」 | 模型不可用或返回格式不合法，系统按设计降级；看终端日志里的具体原因 |
 | 报告页没有历史会话 | 「结束面试」或「结束并看报告」后才会出现在下拉框 |
-| 想从零开始 | 停止服务后删除 `项目根目录\data\` 目录 |
+| 想从零开始 | 停止服务后删除数据目录（`scripts\start.cmd` 用 `项目根目录\data\`，`dist\app.cmd` 用 `dist\data\`） |
 | 端口被占用 | `scripts\start.cmd mock 9000` |
 | 终端中文日志是乱码 | 控制台代码页问题，不影响功能；用 `chcp 65001` 切 UTF-8 |
 
@@ -204,7 +204,7 @@ curl "http://127.0.0.1:8090/api/interviews/<sessionId>/report.md"
 如果你想先确认「环境本身没问题」，再开始点界面：
 
 ```bat
-powershell -File scripts\run-tests.ps1        :: 163 项自动化测试（离线，不需要模型）
+powershell -File scripts\run-tests.ps1        :: 169 项自动化测试（离线，不需要模型）
 
 :: 另开一个窗口，先起服务，再对「正在运行的实例」做 26 项 HTTP 冒烟
 scripts\start.cmd mock

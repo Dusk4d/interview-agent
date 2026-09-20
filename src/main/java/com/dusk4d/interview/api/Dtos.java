@@ -215,6 +215,12 @@ public final class Dtos {
             boolean llmAvailable,
             /** 实际生效的模型服务地址（用于排查配置未生效的问题）。 */
             String llmBaseUrl,
+            /** 连通性结论：探测了哪个地址、模型名是否存在于服务端列表（前端直接展示）。 */
+            String llmStatus,
+            /** 不可用时的修复建议：该设哪个环境变量、该用哪个启动命令。 */
+            String llmHint,
+            /** 服务端实际提供的模型名（拿不到时为空）。 */
+            List<String> llmAvailableModels,
             /** 推理型模型是否已自动关闭思考链。 */
             boolean thinkingDisabled,
             String embeddingProvider,

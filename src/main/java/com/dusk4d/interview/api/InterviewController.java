@@ -12,6 +12,8 @@ import com.dusk4d.interview.error.NotFoundException;
 import com.dusk4d.interview.error.ValidationException;
 import com.dusk4d.interview.llm.EmbeddingClient;
 import com.dusk4d.interview.llm.LlmClient;
+import com.dusk4d.interview.llm.LlmDiagnostics;
+import com.dusk4d.interview.llm.MockLlmClient;
 import com.dusk4d.interview.rag.DocumentRetriever;
 import com.dusk4d.interview.rag.KnowledgeBase;
 import com.dusk4d.interview.rag.VectorStore;
@@ -56,6 +58,7 @@ public class InterviewController {
     private final DocumentRetriever retriever;
     private final AppProperties properties;
     private final org.springframework.core.env.Environment environment;
+    private final LlmDiagnostics diagnostics;
 
     public InterviewController(ResumeImportService resumeService,
                                InterviewService interviewService,
@@ -65,7 +68,8 @@ public class InterviewController {
                                EmbeddingClient embeddingClient,
                                DocumentRetriever retriever,
                                AppProperties properties,
-                               org.springframework.core.env.Environment environment) {
+                               org.springframework.core.env.Environment environment,
+                               LlmDiagnostics diagnostics) {
         this.resumeService = resumeService;
         this.interviewService = interviewService;
         this.knowledgeBase = knowledgeBase;
@@ -75,19 +79,28 @@ public class InterviewController {
         this.retriever = retriever;
         this.properties = properties;
         this.environment = environment;
+        this.diagnostics = diagnostics;
     }
 
     // ---------------------------------------------------------------- 系统状态
 
     @GetMapping("/health")
     public Dtos.HealthView health() {
+        // Mock 模式没有真实端点可探测，直接给出结论，避免去连 1234 产生无意义的等待。
+        boolean mock = llmClient instanceof MockLlmClient;
+        LlmDiagnostics.Diagnosis diagnosis = mock
+                ? new LlmDiagnostics.Diagnosis(true, "离线 Mock 模式：模板出题 + 启发式评分，不会调用真实模型", null, List.of())
+                : diagnostics.diagnose(properties.llm().resolvedBaseUrl(), properties.llm().resolvedChatModel());
         return new Dtos.HealthView(
                 "UP",
                 "0.1.0",
                 llmClient.provider(),
                 llmClient.modelName(),
-                llmClient.available(),
+                diagnosis.available(),
                 properties.llm().resolvedBaseUrl(),
+                diagnosis.status(),
+                diagnosis.hint(),
+                diagnosis.availableModels(),
                 properties.llm().shouldDisableThinking(),
                 embeddingClient.provider(),
                 embeddingClient.dimension(),

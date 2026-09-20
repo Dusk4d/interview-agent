@@ -245,12 +245,18 @@
       $('llm-text').textContent = health.llmAvailable
         ? (health.llmProvider + ' · ' + health.llmModel)
         : '模型未连接（可降级运行）';
+      // 悬停能看到「到底探测了哪个地址、服务端有哪些模型」，否则用户只能猜。
+      const chip = $('llm-chip');
+      if (chip) {
+        chip.title = [health.llmStatus, health.llmHint].filter(Boolean).join('\n');
+      }
       $('storage-chip').title = '存储：' + health.storageMode + '；向量库片段：' + health.knownChunks;
       $('storage-text').textContent =
         '知识库 ' + health.knowledgeItems + ' 条 · 片段 ' + health.knownChunks + ' · 检索 ' + health.embeddingProvider;
       if (!health.llmAvailable) {
+        // 直接把后端算好的原因和建议贴出来：只说「未连接」会让「我明明开着 Ollama」变成死胡同。
         toast('warn', '模型服务未连接',
-          '出题与评分会使用降级策略并明确标注。启动 LM Studio（127.0.0.1:1234）或 Ollama 后刷新即可恢复完整能力。', 9000);
+          (health.llmStatus || '') + (health.llmHint ? '\n\n' + health.llmHint : ''), 15000);
       }
     } catch (error) {
       $('llm-dot').className = 'dot bad';
@@ -801,6 +807,11 @@
       const tab = event.target.closest('.tab');
       if (tab) activate(tab.dataset.panel);
     });
+
+    // 模型状态：点一下重新探测。改完环境变量要重启服务，但「模型刚启动好」这种情况
+    // 不必再刷新整个页面。
+    $('llm-chip').addEventListener('click', () => loadHealth());
+    $('llm-chip').style.cursor = 'pointer';
 
     // 简历：拖放/选择/粘贴
     const dropzone = $('dropzone');
