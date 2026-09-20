@@ -19,6 +19,11 @@
   locks those families to the versions declared in pom.xml.
 
   Result is written to target/resolved-classpath.txt and returned to the caller.
+  An equivalent Java @argfile is written to target/test-classpath.args, because
+  cmd.exe cannot carry this classpath in an environment variable: "set /p" truncates
+  the line at 1023 characters, so a .cmd launcher that reads the .txt file silently
+  loses most of the classpath (this used to break scripts\smoke-test.cmd with
+  NoClassDefFoundError: com/fasterxml/jackson/databind/ObjectMapper).
 
   NOTE: keep this file ASCII-only. Windows PowerShell 5.1 reads .ps1 files as ANSI
   unless they carry a UTF-8 BOM, so non-ASCII text breaks parsing.
@@ -59,7 +64,8 @@ $script:pinList = @(
     @('org.assertj', 'assertj-core', '3.27.7'),
     @('net.bytebuddy', 'byte-buddy', '1.17.8'),
     @('org.slf4j', 'slf4j-api', '2.0.17'),
-    # logback-classic 与 logback-core 必须同版本，否则启动时打印版本不一致告警
+    # logback-classic and logback-core must stay on the same version, otherwise the
+    # application prints a version-mismatch warning at startup.
     @('ch.qos.logback', 'logback-classic', '1.5.18'),
     @('ch.qos.logback', 'logback-core', '1.5.18'),
     # Spring Boot 4.x / Spring Framework 7.x / JUnit 6.x are also present in the
@@ -265,8 +271,20 @@ foreach ($pin in $script:pinList) {
 $jars = @($script:chosen.Values)
 $outDir = Join-Path $root 'target'
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
+$classpath = $jars -join ';'
 $outFile = Join-Path $outDir 'resolved-classpath.txt'
-$jars -join ';' | Set-Content -Path $outFile -Encoding ascii -NoNewline
+$classpath | Set-Content -Path $outFile -Encoding ascii -NoNewline
+
+# Java @argfile: lets .cmd launchers pass the full classpath without an
+# environment variable, which cmd.exe would truncate at 1023 characters.
+# It must carry the COMPLETE -cp (project classes included): Java's launcher
+# lets a later -cp override an earlier one, so splitting it across the command
+# line and the argfile would silently drop one half.
+# Paths are written with forward slashes: inside an @argfile a backslash is an
+# escape character, so "target\classes" would be read as "targetclasses".
+$argFile = Join-Path $outDir 'test-classpath.args'
+$argClasspath = ('target/classes;target/test-classes;' + $classpath).Replace('\', '/')
+('-cp "{0}"' -f $argClasspath) | Set-Content -Path $argFile -Encoding ascii -NoNewline
 
 Write-Host ("resolved {0} dependencies -> {1}" -f $jars.Count, $outFile) -ForegroundColor DarkGray
 $jars

@@ -29,12 +29,16 @@ echo [smoke] resolving classpath ...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_ROOT%\scripts\resolve-classpath.ps1" >nul
 if errorlevel 1 ( echo [smoke] classpath resolution failed & popd & exit /b 1)
 
-set "CPFILE=%PROJECT_ROOT%\target\resolved-classpath.txt"
-if not exist "%CPFILE%" ( echo [smoke] %CPFILE% missing & popd & exit /b 1)
-set /p DEPS=<"%CPFILE%"
+set "ARGFILE=%PROJECT_ROOT%\target\test-classpath.args"
+if not exist "%ARGFILE%" ( echo [smoke] %ARGFILE% missing & popd & exit /b 1)
 
+rem Pass the classpath through a Java @argfile. Reading target\resolved-classpath.txt
+rem into a variable does NOT work: "set /p" truncates the line at 1023 characters,
+rem which silently drops most jars (symptom: NoClassDefFoundError for
+rem com/fasterxml/jackson/databind/ObjectMapper while everything else looks fine).
+rem Do not add -cp here as well: a later -cp would override the argfile's one.
 echo [smoke] running checks against %BASE_URL%
-java -Dfile.encoding=UTF-8 -cp "target\classes;target\test-classes;%DEPS%" com.dusk4d.interview.testkit.SmokeTestMain --base-url=%BASE_URL%
+java -Dfile.encoding=UTF-8 @"%ARGFILE%" com.dusk4d.interview.testkit.SmokeTestMain --base-url=%BASE_URL%
 set "RC=%ERRORLEVEL%"
 
 popd

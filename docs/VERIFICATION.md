@@ -2,7 +2,7 @@
 
 本文说明「怎么证明系统能用」，以及哪些结论已经实测、哪些仍然待测。
 
-## 一、自动化测试（155 项）
+## 一、自动化测试（163 项）
 
 ```bat
 powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
@@ -36,8 +36,9 @@ powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
 | 评分容错 | `AnswerEvaluatorToleranceTest` | 10 | 真实模型畸形输出：数组形式维度、10 分制、百分制、嵌套 scores、中文维度名、缺维度必须降级而非记 0 分 |
 | 模型客户端 | `OpenAiCompatibleClientTest` | 10 | 思考链抑制边界、**HTTP/1.1 强制**、**response_format 协商与降级判定**、请求体构造 |
 | 离线评测集 | `EvalCorpusTest` | 4 | 4 份简历的解析召回（人工确认字段不丢）、极简简历不编造、**三档人工回答的评分排序单调性**、评测集自洽 |
+| 模板出题 | `MockLlmClientQuestionTest` | 8 | 离线模板出题必须点名真实项目（不得退化成「该项目」）、提示语不得漏进题目正文、题序轮换不重复、题型标签与题目内容一致 |
 
-合计 **155 次测试执行，全部通过**。
+合计 **163 次测试执行，全部通过**。
 
 ### 验收标准对照（`MvpAcceptanceTest`）
 
@@ -239,6 +240,62 @@ LM Studio 是方案书推荐的首选本地模型之一，接入时暴露了两�
 回归防护：`EvalCorpusTest#parsingRecall` 断言 4 份简历必须抽到人工确认的全部区块类型
 （含 AWARD），任何一类丢失都会直接失败；`EvalCorpusTest` 同时校验评测集自身自洽
 （三档回答齐备且互不相同），避免评测集本身不完整导致漏测。
+
+### 6.8 离线模板出题：项目名解析（手工走查发现的真实缺陷）
+
+`scripts\start.cmd mock` 是给用户「不装模型也能点完整流程」的入口，手工走查时发现它的问题是**看起来坏了**：
+
+1. 第一版问题正文是「在你的**「该项目」**中……」，用户看不出问的是哪个项目。
+   原因：`MockLlmClient` 用 `【简历片段…】` 去检索上下文里抓项目名，而检索上下文实际格式是
+   `[1] 简历片段：项目名`，两边写法不一致 → 一直取不到。
+2. 修好取值来源后，问题变成「在你的「**星轨推荐引擎（请只针对这个项目提问，不要涉及其它项目）**」中……」——
+   提示词的约束句和项目名挤在同一行，被整行当成项目名吃掉了。
+3. 再修之后还剩一个质量问题：模板是固定一句话，一轮 4 道题**一模一样**。
+
+修复：
+- `Prompts.questionUser` 把约束句拆到**单独一行**，项目名那一行保持干净（真实模型同样受益，约束更明确）；
+- `MockLlmClient` 优先读「【当前聚焦项目】」行，`sanitizeProject` 兜底剥离残留的「（请…）」提示语；
+- 项目题按**题序轮换 6 个考察角度**（职责取舍 / 最难技术点 / 量化指标 / 十倍流量 / 团队协作 / 复盘决策），
+  题型标签与模板一一对应，不再出现「标着边界题却在问量化指标」。
+
+回归防护：`MockLlmClientQuestionTest`（8 项）断言必须点名真实项目、不得含「该项目」与提示语、
+题序轮换不重复、量化题必须标为 `PROJECT_RESULT`。
+
+mock 模式实测（4 题连问，2026-09-20）：
+
+```
+Q1 [PROJECT_BOUNDARY] 在你的「星轨推荐引擎」中，你具体负责了哪一部分？……
+Q2 [PROJECT_TRADEOFF] 「星轨推荐引擎」里最难的技术点是什么？你当时如何定位问题、如何验证解决效果？
+Q3 [PROJECT_RESULT]   在「星轨推荐引擎」中，有哪些指标可以证明你的工作产生了效果？请给出具体数字……
+Q4 [PROJECT_TRADEOFF] 如果「星轨推荐引擎」的流量或数据量再涨十倍，现有的哪个设计会最先出问题？你会怎么改？
+评分：4.5 分 / 4 个维度 / degraded=false / 引用：简历片段：星轨推荐引擎（sourceIds=resume-project-003）
+```
+
+### 6.9 启动脚本：cmd.exe 变量长度截断（把冒烟测试跑挂的真实缺陷）
+
+用户按 README 走「打包后冒烟」时 `scripts\smoke-test.cmd` 直接崩：
+
+```
+java.lang.NoClassDefFoundError: com/fasterxml/jackson/databind/ObjectMapper
+```
+
+原因不在业务代码，而在脚本：它用 `set /p DEPS=<target\resolved-classpath.txt` 把 classpath
+读进环境变量，而 **cmd.exe 的 `set /p` 在 1023 个字符处静默截断**。本机 classpath 长 7125 字符，
+于是绝大多数 jar（含 jackson-databind）根本没进 classpath，但脚本自身完全不报错——
+前一步 `mvn`、classpath 解析都显示成功，只有 java 报一个看起来像「代码写错了」的异常。
+
+修复：
+- `resolve-classpath.ps1` 额外输出 `target/test-classpath.args`（Java `@argfile`），
+  `smoke-test.cmd` 改为 `java -Dfile.encoding=UTF-8 @"target\test-classpath.args" <MainClass>`，
+  彻底绕开环境变量长度限制；
+- argfile 里的路径必须用**正斜杠**：`@argfile` 中反斜杠是转义字符，`target\classes` 会被读成 `targetclasses`；
+- `-cp` 必须**整体**放进 argfile：Java 启动器允许后出现的 `-cp` 覆盖先出现的，
+  一半写在命令行、一半写在 argfile 会静默丢掉一半；
+- 同类问题（PowerShell 把 `-Dfile.encoding=UTF-8` 按点号拆开，java 收到 `.encoding=UTF-8`）
+  在 `smoke-test.ps1` 中一并修掉，改为数组形式传参。
+
+验证：`.cmd` 与 `.ps1` 两个冒烟入口在 mock 模式下均 `ALL SMOKE CHECKS PASSED (26/26)`
+（修复前两个入口分别失败于 Jackson 缺失与 `.encoding=UTF-8`）。
 
 ## 七、待测指标（**不要写进简历当作结论**）
 

@@ -57,7 +57,11 @@ public final class Prompts {
         sb.append("【当前阶段】").append(stageLabel(stage)).append('\n');
         sb.append("【目标难度】").append(difficulty.name()).append('\n');
         if (project != null && !project.isBlank()) {
+            // 明确要求围绕该项目提问：只给事实片段时，模型有时会挑到别的项目或泛泛提问。
+            // 约束必须换行单独一行：项目名所在行要保持干净，否则读取该行的解析方
+            // （MockLlmClient 的模板出题）会把括号里的提示语一起当成项目名。
             sb.append("【当前聚焦项目】").append(project).append('\n');
+            sb.append("（请只针对上面这个项目提问，不要涉及其它项目）").append('\n');
         }
         sb.append('\n').append("【事实片段（唯一事实来源）】\n").append(context).append('\n');
         if (askedQuestions != null && !askedQuestions.isEmpty()) {

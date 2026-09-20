@@ -27,8 +27,23 @@ public class MockLlmClient implements LlmClient {
 
     private static final Pattern ANSWER_MARKER = Pattern.compile("【用户回答】\\s*(.*?)(?:\\n\\s*【|$)", Pattern.DOTALL);
     private static final Pattern QUESTION_MARKER = Pattern.compile("【当前问题】\\s*(.*?)(?:\\n\\s*【|$)", Pattern.DOTALL);
-    private static final Pattern PROJECT_MARKER = Pattern.compile("【简历片段[^】]*】\\s*(.*?)(?:\\n\\s*【|$)", Pattern.DOTALL);
-    private static final Pattern KNOWLEDGE_MARKER = Pattern.compile("【知识点[^】]*】\\s*(.*?)(?:\\n\\s*【|$)", Pattern.DOTALL);
+    /**
+     * 聚焦项目行：由 {@code Prompts.questionUser} 输出，是取项目名最可靠的位置。
+     *
+     * <p>曾经这里用「【简历片段…】」正则去上下文里抓项目名，但检索上下文实际格式是
+     * 「[1] 简历片段：项目名」，两边不一致 → 项目名取不到，模板出题退化成「该项目」。
+     * 现在优先读这一行，正则只作为兜底，并同时兼容两种写法。
+     */
+    private static final Pattern FOCUS_PROJECT_MARKER =
+            Pattern.compile("【当前聚焦项目】\\s*(.+?)\\s*(?:\\n|$)", Pattern.DOTALL);
+    private static final Pattern PROJECT_MARKER =
+            Pattern.compile("【简历片段[^】]*】\\s*(.*?)(?:\\n\\s*【|$)|简历片段[:：]\\s*(.+?)\\s*(?:\\n|$)",
+                    Pattern.DOTALL);
+    private static final Pattern KNOWLEDGE_MARKER =
+            Pattern.compile("【知识点[^】]*】\\s*(.*?)(?:\\n\\s*【|$)|知识点[:：]\\s*(.+?)\\s*(?:\\n|$)",
+                    Pattern.DOTALL);
+    /** 「已经问过的问题」段落标题，必须与 {@code Prompts.questionUser} 保持一致。 */
+    private static final String ASKED_HEADER = "【已经问过的问题，必须避免重复】";
 
     private final ObjectMapper objectMapper;
     private final boolean alwaysMalformedJson;
@@ -110,8 +125,8 @@ public class MockLlmClient implements LlmClient {
     }
 
     private ObjectNode evaluation(LlmRequest request) {
-        String answer = extract(ANSWER_MARKER, request.userPrompt());
-        String question = extract(QUESTION_MARKER, request.userPrompt());
+        String answer = firstNonBlank(firstGroup(ANSWER_MARKER, request.userPrompt()));
+        String question = firstNonBlank(firstGroup(QUESTION_MARKER, request.userPrompt()));
         int seed = stableHash(answer.isEmpty() ? "EMPTY" : answer);
 
         boolean empty = answer.isBlank();
@@ -194,29 +209,90 @@ public class MockLlmClient implements LlmClient {
     }
 
     private ObjectNode question(LlmRequest request) {
-        String project = firstNonBlank(extract(PROJECT_MARKER, request.userPrompt()), "该项目");
-        String knowledge = extract(KNOWLEDGE_MARKER, request.userPrompt());
-        boolean knowledgeMode = !knowledge.isBlank() && project.equals("该项目");
-        String sourceHint = request.userPrompt() == null ? "" : request.userPrompt();
+        String prompt = request.userPrompt() == null ? "" : request.userPrompt();
+        // 优先用「【当前聚焦项目】」这一行（最可靠），再退回从上下文里抓项目名
+        String focused = firstGroup(FOCUS_PROJECT_MARKER, prompt);
+        String contextProject = firstNonBlank(firstGroup(PROJECT_MARKER, prompt), "");
+        String project = firstNonBlank(sanitizeProject(focused), contextProject, "该项目");
+        String knowledge = firstGroup(KNOWLEDGE_MARKER, prompt);
+        boolean knowledgeMode = knowledge != null && !knowledge.isBlank();
+        String sourceHint = prompt;
 
         ObjectNode root = objectMapper.createObjectNode();
         String fallbackType = knowledgeMode ? "PRINCIPLE" : "PROJECT_TECH";
-        root.put("type", detectType(sourceHint, knowledgeMode, fallbackType));
+        String detectedType = detectType(sourceHint, knowledgeMode, fallbackType);
         root.put("difficulty", detectDifficulty(sourceHint));
-        String text = knowledgeMode
-                ? "请说明「" + shorten(knowledge, 40) + "」的实现原理、适用边界以及常见误区。"
-                : "在你的「" + shorten(project, 30) + "」中，你具体负责了哪一部分？为什么选择当前的技术方案，"
-                        + "它解决了什么问题，又带来了哪些新的限制？";
-        root.put("question", text);
-        root.put("intent", knowledgeMode ? "考察基础知识的原理理解与边界意识" : "考察项目事实、技术选型动机与取舍");
-        root.putArray("focus").add(knowledgeMode ? "原理机制" : "个人职责").add("设计取舍").add("边界条件");
-        root.put("followUpPlan", knowledgeMode ? "若只回答定义，继续追问边界条件与反例" : "若只回答做了什么，追问技术机制与量化结果");
+        if (knowledgeMode) {
+            root.put("type", detectedType);
+            String text = "请说明「" + shorten(knowledge, 40) + "」的实现原理、适用边界以及常见误区。";
+            root.put("question", text);
+            root.put("intent", "考察基础知识的原理理解与边界意识");
+            root.putArray("focus").add("原理机制").add("设计取舍").add("边界条件");
+            root.put("followUpPlan", "若只回答定义，继续追问边界条件与反例");
+        } else {
+            // 类型必须跟轮换到的模板一致：否则会出现「标着项目边界题、实际在问量化结果」
+            String rotatedType = PROJECT_TEMPLATE_TYPES[askedCount(prompt) % PROJECT_TEMPLATE_TYPES.length];
+            root.put("type", rotatedType);
+            root.put("question", projectQuestion(project, askedCount(prompt)));
+            root.put("intent", "考察项目事实、技术选型动机与取舍");
+            root.putArray("focus").add("个人职责").add("设计取舍").add("边界条件");
+            root.put("followUpPlan", "若只回答做了什么，追问技术机制与量化结果");
+        }
         root.putArray("sourceIds");
         return root;
     }
 
+    /**
+     * 项目题模板按「已问过几题」轮换，类型表与 {@link #projectQuestion} 的分支一一对应。
+     *
+     * <p>模板引擎没有真实模型那种改写能力，如果固定一句话，一轮面试里会出现 4 道
+     * 一模一样的问题，看起来像坏了。这里按题序换考察角度，让离线演示和 UI 点击
+     * 走查能看到一条正常的面试推进曲线。
+     */
+    private static final String[] PROJECT_TEMPLATE_TYPES = {
+            "PROJECT_BOUNDARY", "PROJECT_TRADEOFF", "PROJECT_RESULT",
+            "PROJECT_TRADEOFF", "BEHAVIOR", "PROJECT_TRADEOFF"
+    };
+
+    private String projectQuestion(String project, int asked) {
+        String quoted = "「" + shorten(project, 30) + "」";
+        return switch (asked % PROJECT_TEMPLATE_TYPES.length) {
+            case 0 -> "在你的" + quoted + "中，你具体负责了哪一部分？为什么选择当前的技术方案，"
+                    + "它解决了什么问题，又带来了哪些新的限制？";
+            case 1 -> quoted + "里最难的技术点是什么？你当时如何定位问题、如何验证解决效果？";
+            case 2 -> "在" + quoted + "中，有哪些指标可以证明你的工作产生了效果？"
+                    + "请给出具体数字，并说明这个数字是怎么测出来的。";
+            case 3 -> "如果" + quoted + "的流量或数据量再涨十倍，现有的哪个设计会最先出问题？你会怎么改？";
+            case 4 -> "在" + quoted + "中，你和团队其他成员的分工边界是什么？"
+                    + "有没有出现过方案分歧，最后是怎么定的？";
+            default -> "回头看" + quoted + "，如果让你重做一次，你会改掉哪一个技术决策？为什么？";
+        };
+    }
+
+    /**
+     * 统计提示词里「已经问过的问题」条数，用来决定下一个模板。
+     *
+     * <p>没有该段落说明是首题，返回 0。
+     */
+    private int askedCount(String prompt) {
+        int start = prompt.indexOf(ASKED_HEADER);
+        if (start < 0) {
+            return 0;
+        }
+        int count = 0;
+        for (String line : prompt.substring(start + ASKED_HEADER.length()).split("\n")) {
+            String trimmed = line.strip();
+            if (trimmed.startsWith("- ")) {
+                count++;
+            } else if (!trimmed.isEmpty() && count > 0) {
+                break;
+            }
+        }
+        return count;
+    }
+
     private ObjectNode followUp(LlmRequest request) {
-        String focus = extract(Pattern.compile("【待追问要点】\\s*(.*?)(?:\\n\\s*【|$)", Pattern.DOTALL), request.userPrompt());
+        String focus = firstNonBlank(firstGroup(Pattern.compile("【待追问要点】\\s*(.*?)(?:\\n\\s*【|$)", Pattern.DOTALL), request.userPrompt()));
         ObjectNode root = objectMapper.createObjectNode();
         root.put("type", "FOLLOW_UP");
         root.put("difficulty", "HARD");
@@ -279,15 +355,46 @@ public class MockLlmClient implements LlmClient {
         return "MEDIUM";
     }
 
-    private String extract(Pattern pattern, String text) {
+    /**
+     * 取正则的第一个非空捕获组。
+     *
+     * <p>兼容「一个正则里两种写法」的场景：PROJECT_MARKER / KNOWLEDGE_MARKER 各有
+     * 两个分支，命中哪个分支对应的组就取哪个，另一个为 null。
+     */
+    private String firstGroup(Pattern pattern, String text) {
         if (text == null) {
-            return "";
+            return null;
         }
         Matcher matcher = pattern.matcher(text);
-        if (matcher.find()) {
-            return matcher.group(1).strip();
+        if (!matcher.find()) {
+            return null;
         }
-        return "";
+        for (int group = 1; group <= matcher.groupCount(); group++) {
+            String value = matcher.group(group);
+            if (value != null && !value.isBlank()) {
+                return value.strip();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 项目名清洗：如果「【当前聚焦项目】」那一行后面还跟着「（请…）」这类提示语，
+     * 把它去掉，避免提示语漏进问题正文里被用户看到。
+     *
+     * <p>{@code Prompts.questionUser} 已把约束拆到单独一行，这里只是兜底，
+     * 保证即使提示词格式再变，模板出题也不会输出「星轨推荐引擎（请只针对…）」。
+     */
+    private String sanitizeProject(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.strip();
+        int hint = trimmed.indexOf("（请");
+        if (hint > 0) {
+            trimmed = trimmed.substring(0, hint).strip();
+        }
+        return trimmed;
     }
 
     private String firstNonBlank(String... values) {

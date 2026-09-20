@@ -40,8 +40,15 @@ try {
     if (-not $deps) { throw 'dependency classpath is empty; check .m2repo' }
 
     Write-Host ("[smoke] running checks against {0}" -f $BaseUrl) -ForegroundColor Cyan
-    & java -Dfile.encoding=UTF-8 -cp "target\classes;target\test-classes;$deps" `
-        com.dusk4d.interview.testkit.SmokeTestMain "--base-url=$BaseUrl"
+    # Quote the -D flags: passed bare, PowerShell splits "-Dfile.encoding=UTF-8"
+    # at the dot and java receives ".encoding=UTF-8" instead.
+    $javaArgs = @(
+        '-Dfile.encoding=UTF-8'
+        '-cp', "target\classes;target\test-classes;$deps"
+        'com.dusk4d.interview.testkit.SmokeTestMain'
+        "--base-url=$BaseUrl"
+    )
+    & java @javaArgs
     $code = $LASTEXITCODE
     if ($code -ne 0) { throw "smoke test reported failures (exit=$code)" }
     Write-Host 'smoke test passed' -ForegroundColor Green
