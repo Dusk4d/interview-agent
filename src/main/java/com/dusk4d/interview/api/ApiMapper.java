@@ -77,6 +77,7 @@ public final class ApiMapper {
                 evaluation.corrections(),
                 evaluation.suggestedAdditions(),
                 evaluation.referenceAnswerStructure(),
+                evaluation.referenceAnswer(),
                 evaluation.evidenceWarnings(),
                 evaluation.followUpRecommended(),
                 evaluation.followUpFocus(),

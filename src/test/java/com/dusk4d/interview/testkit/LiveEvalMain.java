@@ -500,7 +500,7 @@ public final class LiveEvalMain {
                             0.3, 1600, 3000, 120000, 0, false, null, 0.0, evalSamples),
                     new AppProperties.Embedding("local", 256, 8),
                     new AppProperties.Retrieval(4, 0.05, 4000, 3),
-                    new AppProperties.Interview(10, 1, 8, 4000),
+                    new AppProperties.Interview(10, 1, 8, 4000, 3),
                     new AppProperties.Privacy(true, false),
                     new AppProperties.Storage("memory", ""),
                     new AppProperties.Parser(10 * 1024 * 1024));

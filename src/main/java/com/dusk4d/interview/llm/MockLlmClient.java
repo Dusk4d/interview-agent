@@ -193,6 +193,11 @@ public class MockLlmClient implements LlmClient {
         additions.add("补充个人在其中的具体职责与产出");
 
         root.put("referenceAnswerStructure", "背景（项目/场景）→ 个人职责 → 技术机制 → 难点与取舍 → 结果与验证");
+        // 模板没有改写能力，示范表达直接复用用户自己的原话：这样绝不可能引入他没说过的指标，
+        // 与 AnswerEvaluator 的防编造校验口径一致（真实模型那条路径靠提示词 + 该校验兜底）。
+        root.put("referenceAnswer", empty ? ""
+                : "（示范表达，不是标准答案）按「背景 → 职责 → 机制 → 取舍 → 结果」重新组织你刚才的内容："
+                        + shorten(answer, 200));
         root.putArray("evidenceWarnings");
         root.put("followUpRecommended", !empty && (missing.size() > 0 || technical <= 3));
         root.put("followUpFocus", empty ? "先说明你的整体思路" : "深入追问技术机制与边界条件");

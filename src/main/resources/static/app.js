@@ -166,6 +166,15 @@
       if (block) container.appendChild(block);
     });
 
+    if (evaluation.referenceAnswer) {
+      const box = el('div', 'meta');
+      box.appendChild(el('span', null, '参考回答（示范表达，不是标准答案）：'));
+      const text = el('div');
+      text.style.marginTop = '4px';
+      text.textContent = evaluation.referenceAnswer;
+      box.appendChild(text);
+      container.appendChild(box);
+    }
     if (evaluation.referenceAnswerStructure) {
       const box = el('div', 'meta');
       box.appendChild(el('span', null, '参考回答结构：'));
@@ -483,6 +492,9 @@
       busyId: isMock ? 'mock-busy' : 'practice-busy',
       nextId: isMock ? 'btn-mock-next' : 'btn-practice-next',
       followId: isMock ? 'btn-mock-followup' : 'btn-practice-followup',
+      // 重答与换题属于方案书「场景一 单题项目练习」，完整模拟面试不做这两件事
+      retryId: isMock ? null : 'btn-practice-retry',
+      replaceId: isMock ? null : 'btn-practice-replace',
       finishId: isMock ? 'btn-mock-finish' : 'btn-practice-finish',
       submitId: isMock ? 'btn-mock-submit' : 'btn-practice-submit',
       startId: isMock ? 'btn-mock-start' : 'btn-practice-start'
@@ -537,7 +549,8 @@
       state[ref.key].question = question;
       state[ref.key].canFollowUp = false;
       chatAppend(ref, questionBubble(question));
-      setButtons(false, [ref.submitId, ref.finishId]);
+      setButtons(false, [ref.submitId, ref.finishId, ref.replaceId]);
+      setButtons(true, [ref.retryId]);
       const session = await api.get('/api/interviews/' + sessionId);
       $(ref.statusId).textContent = session.modeLabel + ' · ' + session.questionCount + '/' + session.maxQuestions;
       if (mode === 'mock') renderStages('mock-stages', session.stage);
@@ -570,19 +583,23 @@
       return;
     }
     busy(ref.busyId, true);
-    setButtons(true, [ref.submitId, ref.nextId, ref.followId, ref.finishId]);
+    setButtons(true, [ref.submitId, ref.nextId, ref.followId, ref.finishId, ref.retryId, ref.replaceId]);
     try {
       const result = await api.post('/api/interviews/' + sessionId + '/answers', {
         questionId: question.id,
         content: content
       });
       chatAppend(ref, answerBubble({ questionId: question.id, content: content }, result.evaluation));
+      state[ref.key].lastAnswer = content;
       renderFeedback($(ref.feedbackId), result.evaluation, result.session);
       $(ref.answerId).value = '';
       updateCounter(ref.answerId, ref.counterId);
       $(ref.statusId).textContent = result.session.stateDescription;
       state[ref.key].canFollowUp = result.nextAction === 'FOLLOW_UP';
       setButtons(false, [ref.finishId, ref.nextId]);
+      // 刚答完、还没下发下一题：此时允许「重新回答」，但不允许「换一道题」（本题已作答）
+      setButtons(false, [ref.retryId]);
+      setButtons(true, [ref.replaceId]);
       if (state[ref.key].canFollowUp) {
         setButtons(false, [ref.followId]);
       } else {
@@ -600,18 +617,72 @@
     }
   }
 
+  /**
+   * 重新回答当前题：旧分数会在服务端作废，这里把上次的回答填回输入框方便修改。
+   */
+  async function retryAnswer(mode) {
+    const ref = controller(mode);
+    const sessionId = state[ref.key].sessionId;
+    if (!sessionId) return;
+    busy(ref.busyId, true);
+    setButtons(true, [ref.submitId, ref.nextId, ref.followId, ref.retryId, ref.replaceId]);
+    try {
+      const result = await api.post('/api/interviews/' + sessionId + '/retry');
+      state[ref.key].question = result.question;
+      state[ref.key].canFollowUp = false;
+      renderFeedback($(ref.feedbackId), null, null);
+      $(ref.answerId).value = state[ref.key].lastAnswer || '';
+      updateCounter(ref.answerId, ref.counterId);
+      $(ref.statusId).textContent = result.session.stateDescription;
+      chatAppend(ref, el('div', 'meta',
+        '本题重新作答' + (result.discardedScore === null || result.discardedScore === undefined
+          ? '' : '（原分数 ' + Number(result.discardedScore).toFixed(2) + ' 已作废）') + '，改完再提交一次即可。'));
+      setButtons(false, [ref.submitId, ref.finishId]);
+    } catch (error) {
+      showError(error);
+      setButtons(false, [ref.retryId, ref.finishId]);
+    } finally {
+      busy(ref.busyId, false);
+    }
+  }
+
+  /** 换一道题：被换掉的题不计入题量与报告。 */
+  async function replaceQuestion(mode) {
+    const ref = controller(mode);
+    const sessionId = state[ref.key].sessionId;
+    if (!sessionId) return;
+    busy(ref.busyId, true);
+    setButtons(true, [ref.submitId, ref.replaceId, ref.nextId, ref.retryId, ref.finishId]);
+    try {
+      const question = await api.post('/api/interviews/' + sessionId + '/replace-question');
+      state[ref.key].question = question;
+      state[ref.key].canFollowUp = false;
+      chatAppend(ref, questionBubble(question));
+      setButtons(false, [ref.submitId, ref.finishId, ref.replaceId]);
+      const session = await api.get('/api/interviews/' + sessionId);
+      $(ref.statusId).textContent = session.modeLabel + ' · ' + session.questionCount + '/' + session.maxQuestions;
+    } catch (error) {
+      showError(error);
+      setButtons(false, [ref.submitId, ref.replaceId, ref.finishId]);
+    } finally {
+      busy(ref.busyId, false);
+    }
+  }
+
   async function requestFollowUp(mode) {
     const ref = controller(mode);
     const sessionId = state[ref.key].sessionId;
     if (!sessionId) return;
     busy(ref.busyId, true);
-    setButtons(true, [ref.followId, ref.nextId, ref.submitId, ref.finishId]);
+    setButtons(true, [ref.followId, ref.nextId, ref.submitId, ref.finishId, ref.retryId, ref.replaceId]);
     try {
       const question = await api.post('/api/interviews/' + sessionId + '/follow-up');
       state[ref.key].question = question;
       state[ref.key].canFollowUp = false;
       chatAppend(ref, questionBubble(question));
-      setButtons(false, [ref.submitId, ref.finishId, ref.nextId]);
+      // 追问也是一道待回答的新题：可以作答或换掉它，但不能「重答」（还没答过）
+      setButtons(false, [ref.submitId, ref.finishId, ref.nextId, ref.replaceId]);
+      setButtons(true, [ref.retryId]);
     } catch (error) {
       showError(error);
       setButtons(false, [ref.nextId, ref.finishId]);
@@ -625,7 +696,7 @@
     const sessionId = state[ref.key].sessionId;
     if (!sessionId) return;
     busy(ref.busyId, true);
-    setButtons(true, [ref.nextId, ref.followId, ref.submitId, ref.finishId]);
+    setButtons(true, [ref.nextId, ref.followId, ref.submitId, ref.finishId, ref.retryId, ref.replaceId]);
     try {
       await api.post('/api/interviews/' + sessionId + '/finish', { reason: '用户主动结束' });
       toast('ok', '面试已结束', '正在生成复盘报告…');
@@ -868,6 +939,8 @@
     $('btn-practice-start').addEventListener('click', () => startInterview('practice'));
     $('btn-practice-next').addEventListener('click', () => nextQuestion('practice'));
     $('btn-practice-followup').addEventListener('click', () => requestFollowUp('practice'));
+    $('btn-practice-retry').addEventListener('click', () => retryAnswer('practice'));
+    $('btn-practice-replace').addEventListener('click', () => replaceQuestion('practice'));
     $('btn-practice-finish').addEventListener('click', () => finishInterview('practice'));
     $('btn-practice-submit').addEventListener('click', () => submitAnswer('practice'));
     $('practice-answer').addEventListener('input', () => updateCounter('practice-answer', 'practice-counter'));

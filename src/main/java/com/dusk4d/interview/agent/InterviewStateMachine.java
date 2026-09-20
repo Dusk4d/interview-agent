@@ -110,6 +110,41 @@ public final class InterviewStateMachine {
         }
     }
 
+    /**
+     * 是否允许「重新回答当前题」。
+     *
+     * <p>只有在「刚答完这道题、还没下发下一题」时才允许：状态是 {@code NEXT_QUESTION} 或
+     * {@code FOLLOW_UP}。一旦进入下一题，当前题就换人了，此时重答会被拒绝并提示清楚。
+     */
+    public static void requireRetryAnswer(SessionStatus status) {
+        if (status == SessionStatus.NEXT_QUESTION || status == SessionStatus.FOLLOW_UP) {
+            return;
+        }
+        String reason = switch (status) {
+            case WAITING_ANSWER -> "这道题还没有提交过回答，直接提交即可，不需要重答。";
+            case FINISHED, REPORT_READY -> "本场面试已结束，无法重答。请新建一场面试。";
+            case CANCELLED -> "本场面试已取消，无法重答。";
+            case FAILED -> "本场会话已失败，请新建一场面试。";
+            default -> "当前状态不支持重答：" + describe(status);
+        };
+        throw new InvalidSessionStateException(reason);
+    }
+
+    /** 是否允许「换一道题」（仅在已下发、尚未回答时）。 */
+    public static void requireReplaceQuestion(SessionStatus status) {
+        if (status == SessionStatus.WAITING_ANSWER) {
+            return;
+        }
+        String reason = switch (status) {
+            case NEXT_QUESTION, FOLLOW_UP -> "当前题已经回答过了，请先「重新回答」或直接进入下一题。";
+            case FINISHED, REPORT_READY -> "本场面试已结束，无法换题。";
+            case CANCELLED -> "本场面试已取消，无法换题。";
+            case CREATED, RESUME_READY -> "还没有开始面试，请先获取第一道题。";
+            default -> "当前状态不支持换题：" + describe(status);
+        };
+        throw new InvalidSessionStateException(reason);
+    }
+
     /** 供前端展示的状态说明。 */
     public static String describe(SessionStatus status) {
         return switch (status) {

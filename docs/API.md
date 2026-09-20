@@ -245,6 +245,7 @@ Base URL：`http://127.0.0.1:8090`
     "corrections": [],
     "suggestedAdditions": ["补充该技术方案的适用边界与替代方案对比"],
     "referenceAnswerStructure": "背景 → 个人职责 → 技术机制 → 难点取舍 → 结果验证",
+    "referenceAnswer": "背景：大促时网关被刷接口导致误杀。我负责限流与熔断：用 Redis 令牌桶做分布式限流，Sentinel 做熔断降级。结果：误杀率从 1.2% 降至 0.1%，核心链路可用性从 99.5% 提升至 99.95%。",
     "evidenceWarnings": ["提到了效果提升但没有给出可核验的数字或验证方式"],
     "followUpRecommended": true,
     "followUpFocus": "深入追问技术机制与边界条件",
@@ -264,12 +265,38 @@ Base URL：`http://127.0.0.1:8090`
 
 * 空回答 → 400（不会调用模型，不消耗额度）
 * 过短回答（<`min-answer-chars`，默认 8）→ 400，状态保持可重试
-* 同一题重复提交 → 409
+* 同一题重复提交 → 409（想重答请用下面的 `retry`，它会把旧成绩作废）
 * 未出题就提交 / 会话已结束 → 409
+
+### POST `/api/interviews/{id}/retry`
+
+「重新回答当前题」（方案书场景一）。语义是**旧成绩作废、本题重来**。
+
+```json
+{
+  "question": { "…": "需要重答的原题，内容不变" },
+  "session": { "…": "状态回到 WAITING_ANSWER，answerCount 减 1" },
+  "discardedScore": 3.25
+}
+```
+
+* 只有「刚答完这道题、还没下发下一题」时才允许（状态 `NEXT_QUESTION` / `FOLLOW_UP`）；否则 409。
+* 旧回答与旧评分会被**真删除**（不是标记），因此 `GET /evaluation` 会重新返回 404——
+  这样报告的平均分、能力雷达、薄弱点都不会把同一道题算两次。
+* `discardedScore` 此前没有评分时为 `null`，前端据此提示用户旧分数已失效。
+
+### POST `/api/interviews/{id}/replace-question`
+
+「换一道题」（方案书场景一）。响应同 `next-question`。
+
+* 只有「已下发、尚未作答」时才允许（状态 `WAITING_ANSWER`）；已作答的题要先 `retry` 或进入下一题，否则 409。
+* 被换掉的题会被删除且**不消耗题量配额**（`questionCount` 不变），但它的指纹会留在
+  `askedQuestionDigests` 里，避免模型又出一道一样的。
+* 每场最多换 `app.interview.max-question-skips` 次（默认 3）；超限返回 409。
 
 ### GET `/api/interviews/{id}/evaluation`
 
-返回最近一次评估与当前会话状态；从未提交过回答时返回 404。
+返回最近一次评估与当前会话状态；从未提交过回答（或刚执行过 `retry`）时返回 404。
 
 ### POST `/api/interviews/{id}/follow-up`
 

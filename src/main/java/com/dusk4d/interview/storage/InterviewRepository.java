@@ -46,6 +46,11 @@ public interface InterviewRepository {
         public Optional<AnswerEvaluation> evaluationByQuestion(String questionId) {
             return evaluations.stream().filter(e -> e.questionId().equals(questionId)).findFirst();
         }
+
+        /** 某条回答的全部评分（正常只有一条；重答/多次采样调试时可能不止一条）。 */
+        public List<AnswerEvaluation> evaluationsOfAnswer(String answerId) {
+            return evaluations.stream().filter(e -> e.answerId().equals(answerId)).toList();
+        }
     }
 
     // ---------------------------------------------------------------- 简历
@@ -72,13 +77,26 @@ public interface InterviewRepository {
 
     List<InterviewQuestion> questionsOf(String sessionId);
 
+    /**
+     * 删除一道题（「换一道题」用：被换掉的题不再计入报告与题量统计）。
+     *
+     * @return 是否确实删除了记录
+     */
+    boolean deleteQuestion(String questionId);
+
     InterviewAnswer saveAnswer(InterviewAnswer answer);
 
     List<InterviewAnswer> answersOf(String sessionId);
 
+    /** 删除一条回答（「重新回答」用：旧答案必须移除，否则报告会重复统计同一题）。 */
+    boolean deleteAnswer(String answerId);
+
     AnswerEvaluation saveEvaluation(AnswerEvaluation evaluation);
 
     List<AnswerEvaluation> evaluationsOf(String sessionId);
+
+    /** 删除一条评分（与 {@link #deleteAnswer} 成对使用，避免旧分数留在报告里）。 */
+    boolean deleteEvaluation(String evaluationId);
 
     // ---------------------------------------------------------------- 报告
 

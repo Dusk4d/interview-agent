@@ -100,8 +100,18 @@ public class MapBackedInterviewRepository implements InterviewRepository {
     }
 
     @Override
+    public boolean deleteQuestion(String questionId) {
+        return questions.deleteById(questionId);
+    }
+
+    @Override
     public InterviewAnswer saveAnswer(InterviewAnswer answer) {
         return answers.save(answer);
+    }
+
+    @Override
+    public boolean deleteAnswer(String answerId) {
+        return answers.deleteById(answerId);
     }
 
     @Override
@@ -115,6 +125,11 @@ public class MapBackedInterviewRepository implements InterviewRepository {
     @Override
     public AnswerEvaluation saveEvaluation(AnswerEvaluation evaluation) {
         return evaluations.save(evaluation);
+    }
+
+    @Override
+    public boolean deleteEvaluation(String evaluationId) {
+        return evaluations.deleteById(evaluationId);
     }
 
     @Override

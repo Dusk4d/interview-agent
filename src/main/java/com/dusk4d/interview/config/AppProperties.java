@@ -27,7 +27,7 @@ public record AppProperties(
         llm = llm == null ? Llm.defaults() : llm;
         embedding = embedding == null ? new Embedding(null, 256, 16) : embedding;
         retrieval = retrieval == null ? new Retrieval(5, 0.08, 4000, 4) : retrieval;
-        interview = interview == null ? new Interview(8, 1, 8, 4000) : interview;
+        interview = interview == null ? new Interview(8, 1, 8, 4000, 3) : interview;
         privacy = privacy == null ? new Privacy(true, false) : privacy;
         storage = storage == null ? new Storage("file", "") : storage;
         parser = parser == null ? new Parser(10 * 1024 * 1024) : parser;
@@ -156,13 +156,23 @@ public record AppProperties(
     }
 
     public record Interview(int maxQuestions, int followUpLimitPerQuestion,
-                            int minAnswerChars, int maxAnswerChars) {
+                            int minAnswerChars, int maxAnswerChars, int maxQuestionSkips) {
         public int resolvedMaxQuestions() {
             return maxQuestions <= 0 ? 8 : Math.min(maxQuestions, 30);
         }
 
         public int resolvedFollowUpLimit() {
             return followUpLimitPerQuestion <= 0 ? 0 : Math.min(followUpLimitPerQuestion, 3);
+        }
+
+        /**
+         * 一场面试最多能「换一道题」几次。
+         *
+         * <p>换题不消耗题量配额（被换掉的题不计入报告），所以要有个上限，
+         * 否则可以一直换到抽到一道好答的题为止。
+         */
+        public int resolvedMaxQuestionSkips() {
+            return maxQuestionSkips < 0 ? 0 : Math.min(maxQuestionSkips, 20);
         }
     }
 

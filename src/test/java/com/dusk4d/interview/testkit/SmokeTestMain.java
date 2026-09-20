@@ -138,6 +138,54 @@ public final class SmokeTestMain {
             check(answered != null, "question " + next.path("sequence").asInt() + " evaluated");
         }
 
+        step("retry and replace question (scenario 1 of the spec)");
+        JsonNode retrySession = post("/api/interviews", Map.of(
+                "resumeId", resumeId, "mode", "PROJECT", "maxQuestions", 3));
+        if (retrySession == null) {
+            check(false, "second session for retry/replace created");
+        } else {
+            String retrySessionId = retrySession.path("id").asText();
+            JsonNode droppedQuestion = post("/api/interviews/" + retrySessionId + "/next-question", null);
+            JsonNode replaced = post("/api/interviews/" + retrySessionId + "/replace-question", null);
+            check(replaced != null && !replaced.path("id").asText().isBlank(), "replaced question generated");
+            check(replaced != null && droppedQuestion != null
+                            && !replaced.path("id").asText().equals(droppedQuestion.path("id").asText()),
+                    "replaced question differs from the dropped one");
+            JsonNode afterReplace = get("/api/interviews/" + retrySessionId);
+            // 换题不消耗题量配额：仍应只有 1 题
+            check(afterReplace != null && afterReplace.path("questionCount").asInt() == 1,
+                    "replace does not consume the question budget");
+            check(afterReplace != null && afterReplace.path("answerCount").asInt() == 0,
+                    "replace leaves the session unanswered");
+
+            String replacedId = replaced == null ? "" : replaced.path("id").asText();
+            JsonNode firstAttempt = post("/api/interviews/" + retrySessionId + "/answers",
+                    Map.of("questionId", replacedId, "content", "大概是用了锁和唯一索引，细节记不清了。"));
+            check(firstAttempt != null && firstAttempt.path("evaluation").has("referenceAnswer"),
+                    "evaluation carries the referenceAnswer field");
+            double firstScore = firstAttempt == null ? -1
+                    : firstAttempt.path("evaluation").path("totalScore").asDouble(-1);
+
+            JsonNode retried = post("/api/interviews/" + retrySessionId + "/retry", null);
+            check(retried != null && "WAITING_ANSWER".equals(retried.path("session").path("status").asText()),
+                    "retry puts the session back to WAITING_ANSWER");
+            check(retried != null && Math.abs(retried.path("discardedScore").asDouble(-1) - firstScore) < 0.001,
+                    "retry reports the discarded score");
+            JsonNode afterRetry = get("/api/interviews/" + retrySessionId);
+            check(afterRetry != null && afterRetry.path("answerCount").asInt() == 0,
+                    "retry removes the previous answer from the session counters");
+            HttpResponse<String> staleEvaluation = getRaw("/api/interviews/" + retrySessionId + "/evaluation");
+            check(staleEvaluation != null && staleEvaluation.statusCode() == 404,
+                    "discarded evaluation is really gone (404)");
+
+            JsonNode secondAttempt = post("/api/interviews/" + retrySessionId + "/answers",
+                    Map.of("questionId", replacedId,
+                            "content", "背景是任务重复执行。我负责幂等设计，通过 Redis 加锁与唯一索引兜底，"
+                                    + "难点在锁续期，用看门狗解决，压测显示重复执行为 0。"));
+            check(secondAttempt != null && secondAttempt.path("session").path("answerCount").asInt() == 1,
+                    "re-answering counts exactly one answer");
+        }
+
         step("finish interview");
         JsonNode finished = post("/api/interviews/" + sessionId + "/finish", Map.of("reason", "smoke test"));
         check(finished != null && "FINISHED".equals(finished.path("status").asText()), "session finished");

@@ -62,6 +62,14 @@ public class AnswerEvaluator {
     /** 评分采样次数（>1 时取中位数，用于压制小模型的打分波动）。 */
     private final int evalSamples;
 
+    /**
+     * 量化指标识别：带量词或百分号的数字。
+     *
+     * <p>刻意不匹配裸数字，避免「第一步」「两个模块」被当成指标而误杀参考回答。
+     */
+    private static final java.util.regex.Pattern METRIC_PATTERN = java.util.regex.Pattern.compile(
+            "\\d+(?:\\.\\d+)?\\s*(?:%|％|倍|万|亿|ms|毫秒|秒|分钟|小时|QPS|TPS|qps|tps|人日|天)");
+
     public AnswerEvaluator(LlmClient llmClient, StructuredOutputParser parser,
                            AppProperties properties, Clock clock) {
         this.llmClient = llmClient;
@@ -121,7 +129,7 @@ public class AnswerEvaluator {
                 : medianOf(successfulRuns);
         try {
             AnswerEvaluation evaluation = fromModel(question, answerId, merged,
-                    rawOutputs.isEmpty() ? null : rawOutputs.get(0), now);
+                    rawOutputs.isEmpty() ? null : rawOutputs.get(0), answer, context, facts, now);
             if (successfulRuns.size() > 1) {
                 evaluation = withMultiSampleNote(evaluation, successfulRuns.size());
             }
@@ -202,6 +210,7 @@ public class AnswerEvaluator {
                 evaluation.sessionId(), evaluation.totalScore(), evaluation.dimensionScores(),
                 evaluation.strengths(), evaluation.missingPoints(), evaluation.corrections(),
                 evaluation.suggestedAdditions(), evaluation.referenceAnswerStructure(),
+                evaluation.referenceAnswer(),
                 evaluation.evidenceWarnings(), evaluation.followUpRecommended(), evaluation.followUpFocus(),
                 evaluation.summary() + note, evaluation.degraded(), evaluation.rawModelOutput(),
                 evaluation.createdAt());
@@ -359,7 +368,8 @@ public class AnswerEvaluator {
     }
 
     private AnswerEvaluation fromModel(InterviewQuestion question, String answerId, Map<String, Object> parsed,
-                                       String rawOutput, Instant now) {
+                                       String rawOutput, String answer, String context, List<ResumeFact> facts,
+                                       Instant now) {
         Map<String, DimensionScore> dimensions = parseDimensions(parsed);
         if (dimensions.isEmpty()) {
             // 一个维度都没解析出来：判定为结构化失败，交给上层降级，
@@ -379,6 +389,12 @@ public class AnswerEvaluator {
         List<String> evidenceWarnings = StructuredOutputParser.stringList(parsed, "evidenceWarnings");
         String structure = StructuredOutputParser.string(parsed, "referenceAnswerStructure",
                 "背景 → 个人职责 → 技术机制 → 难点取舍 → 结果验证");
+        ReferenceAnswer reference = referenceAnswer(
+                StructuredOutputParser.string(parsed, "referenceAnswer", ""), answer, context, facts);
+        corrections = new ArrayList<>(corrections);
+        if (reference.droppedNote() != null) {
+            corrections.add(reference.droppedNote());
+        }
         return new AnswerEvaluation(
                 UUID.randomUUID().toString(),
                 answerId,
@@ -391,6 +407,7 @@ public class AnswerEvaluator {
                 corrections,
                 StructuredOutputParser.stringList(parsed, "suggestedAdditions"),
                 structure,
+                reference.text(),
                 evidenceWarnings,
                 StructuredOutputParser.bool(parsed, "followUpRecommended", false),
                 StructuredOutputParser.string(parsed, "followUpFocus", ""),
@@ -399,6 +416,58 @@ public class AnswerEvaluator {
                 false,
                 null,
                 now);
+    }
+
+    /** 参考回答及其被丢弃的原因。 */
+    private record ReferenceAnswer(String text, String droppedNote) {
+    }
+
+    /**
+     * 校验模型生成的参考回答：出现「用户没说过的量化指标」就整段丢弃。
+     *
+     * <p>为什么要在代码里再挡一道：提示词已经写明「不得补写没有证据的指标」，但小模型实测中
+     * 仍会顺手编出「QPS 提升 3 倍」这类数字。参考回答是给用户照着复述的，一旦混入编造的指标，
+     * 用户很可能直接背下来去面试——这是本项目最不能接受的失败方式，所以宁可不给参考回答。
+     *
+     * <p>判定方式取「保守但确定」的策略：参考回答里出现的数字（含 %、ms、QPS、倍、万 等量词）
+     * 必须在用户回答或给定事实片段里原样出现过，否则丢弃。
+     */
+    private ReferenceAnswer referenceAnswer(String text, String answer, String context, List<ResumeFact> facts) {
+        if (text == null || text.isBlank()) {
+            return new ReferenceAnswer("", null);
+        }
+        String trimmed = text.strip();
+        String allowed = (answer == null ? "" : answer) + "\n" + (context == null ? "" : context) + "\n"
+                + (facts == null ? "" : facts.stream()
+                        .map(f -> f.label() + " " + f.content()).collect(java.util.stream.Collectors.joining("\n")));
+        if (!hasUnsupportedMetric(trimmed, allowed)) {
+            return new ReferenceAnswer(trimmed, null);
+        }
+        return new ReferenceAnswer("",
+                "模型生成的参考回答引入了原回答与简历中都没有的量化指标，为避免编造已丢弃该段参考回答，"
+                        + "请按 referenceAnswerStructure 自行组织，只使用你真实做过的数据。");
+    }
+
+    /**
+     * 参考回答里是否出现了「来源里没有的量化指标」。
+     *
+     * <p>只检查带量词或百分号的数字（3 倍、60%、200ms、1 万），不检查纯数字——
+     * 否则「第一步」「两个模块」这类表述会造成大量误杀。
+     */
+    private boolean hasUnsupportedMetric(String referenceAnswer, String allowedSource) {
+        java.util.regex.Matcher matcher = METRIC_PATTERN.matcher(referenceAnswer);
+        while (matcher.find()) {
+            String metric = matcher.group();
+            String digits = metric.replaceAll("[^0-9.]", "");
+            if (digits.isEmpty()) {
+                continue;
+            }
+            // 数字本身在来源里出现过即可（容忍写法差异：60% 与 60 视为同一数据）
+            if (!allowedSource.contains(digits)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------- 降级路径
@@ -422,6 +491,8 @@ public class AnswerEvaluator {
                 corrections,
                 heuristic.suggestedAdditions(),
                 "背景 → 个人职责 → 技术机制 → 难点取舍 → 结果验证",
+                // 降级路径没有语义理解能力，硬拼一段「示范表达」只会看起来像真的——留空更诚实。
+                "",
                 heuristic.evidenceWarnings(),
                 heuristic.followUpRecommended(),
                 heuristic.followUpFocus(),

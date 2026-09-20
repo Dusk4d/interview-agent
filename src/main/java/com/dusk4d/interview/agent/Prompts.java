@@ -111,6 +111,15 @@ public final class Prompts {
             2. 不得虚构候选人的经历。回复中只能引用给定的事实片段。
             3. 只能输出 JSON，字段必须齐全，不要输出解释或代码块。
             4. 分数要与依据一致：如果回答为空或答非所问，四个维度都应为 0-1 分。
+
+            【关于 referenceAnswer（参考回答）】这是给候选人照着复述用的「示范表达」，不是标准答案：
+            1. 只能用「用户回答」里已经说过的事实 + 「事实片段 / 简历事实摘要」里已有的信息，
+               不得新增任何数字、指标、技术名词、职责或经历；
+            2. 用户回答里缺少量化结果时，写成占位符「（此处填入你的真实数据）」，
+               绝对不要替候选人编一个数字；
+            3. 用第一人称，按「背景 → 个人职责 → 技术机制 → 难点取舍 → 结果验证」的顺序组织，150-300 字；
+            4. 如果用户回答为空或答非所问，referenceAnswer 输出空字符串 ""，
+               只在 suggestedAdditions 里说明该怎么组织，不要凭空写出一段经历。
             """;
 
     /**
@@ -152,6 +161,7 @@ public final class Prompts {
                   "corrections": ["需要纠正的表述"],
                   "suggestedAdditions": ["建议补充的信息"],
                   "referenceAnswerStructure": "参考回答的结构",
+                  "referenceAnswer": "可复述的示范表达（只能用已提供的事实；缺数据写占位符）",
                   "evidenceWarnings": ["缺少证据的强主张"],
                   "followUpRecommended": true 或 false,
                   "followUpFocus": "若要追问，追问什么",

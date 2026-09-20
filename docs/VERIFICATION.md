@@ -2,7 +2,7 @@
 
 本文说明「怎么证明系统能用」，以及哪些结论已经实测、哪些仍然待测。
 
-## 一、自动化测试（169 项）
+## 一、自动化测试（186 项）
 
 ```bat
 powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
@@ -38,8 +38,10 @@ powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
 | 离线评测集 | `EvalCorpusTest` | 4 | 4 份简历的解析召回（人工确认字段不丢）、极简简历不编造、**三档人工回答的评分排序单调性**、评测集自洽 |
 | 模板出题 | `MockLlmClientQuestionTest` | 8 | 离线模板出题必须点名真实项目（不得退化成「该项目」）、提示语不得漏进题目正文、题序轮换不重复、题型标签与题目内容一致 |
 | 模型连通性诊断 | `LlmDiagnosticsTest` | 6 | 地址可达+模型名匹配才算可用；模型名不存在要点名并给出该改成什么；服务端不返回模型列表时不误判；地址不通要说明探测了哪里、本机该查哪些端口（用真实本地 HTTP 假服务验证） |
+| 参考回答与防编造 | `ReferenceAnswerTest` | 6 | 指标有出处才保留；编造指标整段丢弃并说明原因；简历事实里的数字允许复用；序数词不误杀；模型不给时字段为空；降级评估不给参考回答 |
+| 重答与换题 | `RetryAndReplaceTest` | 11 | 重答后旧答案/旧评分真被删除、报告只算最新一次；未作答或已进入下一题时拒绝重答；换题不占配额且新题不重复、被换的题不留仓储；换题上限；状态机守卫；换题次数不变量 |
 
-合计 **169 次测试执行，全部通过**。
+合计 **186 次测试执行，全部通过**。
 
 ### 验收标准对照（`MvpAcceptanceTest`）
 
@@ -78,9 +80,10 @@ dist\app.cmd
 scripts\smoke-test.cmd            :: 默认 http://127.0.0.1:8090
 ```
 
-`SmokeTestMain` 对运行中的实例断言 26 项：健康状态与知识库、前端页面、粘贴导入简历、脱敏、
-检索来源引用、会话创建、出题有据（`sourceIds` 非空）、四维评分、追问、题目配额、结束、报告与 Markdown 下载、
-以及 400/404/409 错误码映射。
+`SmokeTestMain` 对运行中的实例断言 36 项：健康状态与知识库、前端页面、粘贴导入简历、脱敏、
+检索来源引用、会话创建、出题有据（`sourceIds` 非空）、四维评分、追问、题目配额、
+**换一道题（不占配额、新题不同）**、**参考回答字段存在**、**重新回答（状态回到等待回答、
+作废分数、旧评分真的查不到了）**、结束、报告与 Markdown 下载，以及 400/404/409 错误码映射。
 
 实测输出（2026-09-10，Mock 模型，Windows + JDK 21.0.10）：
 
@@ -114,7 +117,7 @@ knowledgeItems=31 chunks=31
 | `/api/health` | `status=UP`，`llmAvailable=false`，`llmProvider=openai-compatible` |
 | 出题 | 239ms 内返回，`degraded=true`，原因：「模型服务未连接，已使用模板出题…」 |
 | 评分 | `degraded=true`，四个维度齐全，总分 2.25（启发式上限 3.5），总评明确标注降级原因 |
-| 完整冒烟（26 项） | 全部通过（导入 → 出题 → 回答 → 追问 → 报告 → 下载） |
+| 完整冒烟（36 项） | 全部通过（导入 → 出题 → 回答 → 追问 → 报告 → 下载） |
 | 是否需要等待超时 | 不需要：连接失败在 `connect-timeout-ms`（700ms）内返回，不阻塞页面 |
 
 ## 五、手工验证路径（面试演示顺序）
@@ -295,7 +298,7 @@ java.lang.NoClassDefFoundError: com/fasterxml/jackson/databind/ObjectMapper
 - 同类问题（PowerShell 把 `-Dfile.encoding=UTF-8` 按点号拆开，java 收到 `.encoding=UTF-8`）
   在 `smoke-test.ps1` 中一并修掉，改为数组形式传参。
 
-验证：`.cmd` 与 `.ps1` 两个冒烟入口在 mock 模式下均 `ALL SMOKE CHECKS PASSED (26/26)`
+验证：`.cmd` 与 `.ps1` 两个冒烟入口在 mock 模式下均 `ALL SMOKE CHECKS PASSED (36/36)`
 （修复前两个入口分别失败于 Jackson 缺失与 `.encoding=UTF-8`）。
 
 ### 6.10 「模型未连接」说不出原因（用户实际反馈）
@@ -338,7 +341,50 @@ llmHint   = 把地址指过去即可：set INTERVIEW_LLM_BASE_URL=http://127.0.0
 | `llmAvailable` | `true`，`llmStatus` =「已连接 http://127.0.0.1:11434/v1，模型 qwen3:1.7b 可用」 |
 | 出题 | 14s，`type=PROJECT_TECH`，`degraded=false`，问题为「Kafka 事务消息如何保证订单中台重构后的最终一致性？」——回指简历里真实存在的项目 |
 | 评分 | 32s，总分 5.0，4 个维度齐全，`degraded=false`，`nextAction=FOLLOW_UP` |
-| 冒烟 | mock 实例与真实模型实例均 `ALL SMOKE CHECKS PASSED (26/26)` |
+| 冒烟 | mock 实例与真实模型实例均 `ALL SMOKE CHECKS PASSED (36/36)` |
+
+### 6.11 场景一补齐：参考回答 + 重新回答 + 换一道题
+
+对照方案书发现两处未实现（详见 DESIGN.md 第 11/12 节）：场景一要求返回「参考回答」、
+并允许用户选择「重新回答」或「换一道题」。本轮补齐，并做了三组实测。
+
+**一、参考回答与防编造（真实模型 qwen3:1.7b）**
+
+| 场景 | 模型输出的参考回答 | 防编造校验 | 结论 |
+|---|---|---|---|
+| 回答里已有数字（1.2% → 0.1% 等） | 完整保留，只复用用户说过的数据 | 未触发 | 数字有出处，正确放行 |
+| 回答里没数字，但简历事实里有 | 保留，复用了简历里的 1.2% / 0.1% / 99.5% / 99.95% | 未触发 | 简历是用户自己的事实，允许复用 |
+| 回答和简历都没有任何数字 | 「重试间隔逐步拉长以避免雪崩」——模型没有编造数字 | 未触发 | 未过度拦截 |
+
+编造拦截本身由确定性单测覆盖（`ReferenceAnswerTest#dropsFabricatedMetric`）：
+喂入「性能提升了 5 倍、耗时降到 200ms」这类原回答与事实里都没有的指标，
+参考回答整段被丢弃，并追加「为避免编造已丢弃该段参考回答」的纠正说明。
+
+**二、重新回答（进程级实测，mock 实例）**
+
+```text
+第一次作答 score=4.25 answerCount=1 status=NEXT_QUESTION
+POST /retry  →  discardedScore=4.25，status=WAITING_ANSWER，answerCount=0，lastAnswerId 清空
+GET  /evaluation → 404（旧评分被真删除，不是标记）
+重答后作答 score=4.25 answerCount=1
+POST /report → overallScore=4.25 questionCount=1 answerCount=1   ← 只统计最新一次
+```
+
+**三、换一道题（进程级实测，mock 实例）**
+
+```text
+Q1 seq=1 「网关限流改造」中，你具体负责了哪一部分？…
+POST /replace-question
+换题后 seq=1 「网关限流改造」里最难的技术点是什么？…   ← 内容不同，题号仍为 1
+换题后 questionCount=1 answerCount=0 status=WAITING_ANSWER   ← 未消耗题量配额
+```
+
+**四、报告与页面**
+
+* `data/reports.json` 中生成的 Markdown「七、逐题明细」现在同时包含
+  「我的回答」与「参考回答（示范表达，不是标准答案）」；
+* 单题练习页新增「重新回答」「换一道题」两个按钮，重答会把上次的回答填回输入框方便修改；
+* 冒烟脚本新增 10 项断言覆盖上述行为（26 → 36 项），mock 与真实模型实例均全部通过。
 
 ## 七、待测指标（**不要写进简历当作结论**）
 

@@ -11,6 +11,7 @@ import java.util.Map;
  * 参考回答结构以及是否建议追问。
  *
  * @param totalScore      加权总分（0~5，保留两位小数）
+ * @param referenceAnswer 可复述的示范表达（非标准答案；没有证据的量化指标不得补写）
  * @param degraded        是否降级（模型结构化输出失败，使用启发式评估）
  * @param rawModelOutput  降级时保留的原始模型输出片段（截断），便于排查
  * @param evidenceCheck   事实一致性校验结论（是否存在没有证据的强主张）
@@ -27,6 +28,14 @@ public record AnswerEvaluation(
         List<String> corrections,
         List<String> suggestedAdditions,
         String referenceAnswerStructure,
+        /**
+         * 参考回答：按 {@code referenceAnswerStructure} 组织、可照着复述的<b>示范表达</b>。
+         *
+         * <p>它不是标准答案（项目面没有唯一正确答案），只能使用候选人已回答的内容与简历事实；
+         * 缺少量化结果时写成占位符，而不是编一个数字——生成内容若引入了未提供的指标会被丢弃
+         * （见 {@code AnswerEvaluator}）。降级评估时为空。
+         */
+        String referenceAnswer,
         List<String> evidenceWarnings,
         boolean followUpRecommended,
         String followUpFocus,

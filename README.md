@@ -4,7 +4,7 @@
 
 这个项目的重点不是「调用一次大模型」，而是把**简历事实、检索、问题生成、面试状态、回答评估、学习报告**组织成一条可重复使用、可测试、可解释的流程。
 
-> 当前状态：**MVP 全部功能已完成，自动化测试全绿（169 项，含真实 HTTP 端到端、MVP 总验收与打包后进程级冒烟）；并已接入真实本地模型（Ollama qwen3:1.7b）完成实测：问题来源可核验率 100%、结构化输出一次成功率 100%、评分在固定问题与上下文下可完全复现（标准差 0.000）**。
+> 当前状态：**MVP 全部功能已完成，自动化测试全绿（186 项，含真实 HTTP 端到端、MVP 总验收与打包后进程级冒烟）；并已接入真实本地模型（Ollama qwen3:1.7b）完成实测：问题来源可核验率 100%、结构化输出一次成功率 100%、评分在固定问题与上下文下可完全复现（标准差 0.000）**。
 > 文中所有量化结论都标注了来源（测试用例或脚本）；未实测的指标一律写「待测」，不做没有证据的宣称。
 
 ---
@@ -220,7 +220,7 @@ EVALUATING -> FINISHED -> REPORT_READY
 
 ## 六、测试与验证
 
-### 自动化测试（169 项，全部通过）
+### 自动化测试（186 项，全部通过）
 
 ```bat
 powershell -File scripts\run-tests.ps1
@@ -245,11 +245,14 @@ powershell -File scripts\run-tests.ps1
 | `OpenAiCompatibleClientTest` | 10 | 思考链抑制边界、**HTTP/1.1 强制**、**response_format 协商与降级** |
 | `EvalCorpusTest` | 4 | 4 份简历的解析召回（人工确认字段不丢）、极简简历不编造、**三档人工回答的评分排序单调性**、评测集自洽 |
 | `MockLlmClientQuestionTest` | 8 | 离线模板出题必须点名真实项目、题序轮换不重复、题型标签与题目内容一致 |
+| `LlmDiagnosticsTest` | 6 | 「模型未连接」必须说明探测了哪个地址、服务端有哪些模型、该改哪个变量 |
+| `ReferenceAnswerTest` | 6 | **参考回答不得编造指标**：无出处的量化指标整段丢弃；序数词不误杀；降级不给参考回答 |
+| `RetryAndReplaceTest` | 11 | **重新回答**作废旧分数且报告只算最新一次；**换一道题**不占配额且不重复；换题上限；次数不变量 |
 | `MvpAcceptanceTest` | 14 | **方案书第九节验收标准逐条对应**：全格式导入、事实修正、双模式出题、评分可解释、追问不串题、报告生成、四类失败路径、隐私、跨重启恢复，以及全部反面场景 |
 
-合计 **169 次测试执行全部通过**。其中 `MvpAcceptanceTest` 是「一套跑完即可判断系统是否达标」的门禁测试。
+合计 **186 次测试执行全部通过**。其中 `MvpAcceptanceTest` 是「一套跑完即可判断系统是否达标」的门禁测试。
 
-### 打包后进程级冒烟（26 项，全部通过）
+### 打包后进程级冒烟（36 项，全部通过）
 
 ```bat
 scripts\start.cmd mock 8090
@@ -286,7 +289,7 @@ scripts\smoke-test.cmd
 
 | 项目 | 数值 | 来源 |
 |---|---|---|
-| 自动化测试用例 | 169 项，失败 0 | `scripts\run-tests.ps1` |
+| 自动化测试用例 | 186 项，失败 0 | `scripts\run-tests.ps1` |
 | 打包体积 | `dist/` ≈ 23.9 MB（43 个依赖 jar） | `scripts\build-dist.ps1` |
 | 应用启动耗时 | ≈ 3.0 秒（空库，Mock 模型） | `dist/run-out.log` |
 | 知识库种子 | 31 条，8 个主题 | `GET /api/health` |
@@ -383,7 +386,7 @@ git push -u origin main
 | 评分为什么可信？ | 固定 Rubric + 结构化输出 + 分项依据 + 降级时压低上限并标注 | `agent/AnswerEvaluator.java`、`agent/HeuristicEvaluator.java` |
 | 模型挂了怎么办？ | 连接/超时/非法 JSON/空回答四类分别有明确降级路径，不抛 500 | `error/LlmException.java`、`api/ApiExceptionHandler.java` |
 | 简历隐私怎么处理？ | 脱敏在解析后立即执行，联系方式不进上下文，日志不写原文 | `privacy/PrivacyMasker.java`、`HttpEndToEndTest#uploadResumeViaMultipart` |
-| 怎么验证质量？ | 169 项自动化测试 + 打包后进程级冒烟 + 真实模型离线评测（LiveEvalMain） | `src/test/java/**`、`scripts/smoke-test.cmd` |
+| 怎么验证质量？ | 186 项自动化测试 + 打包后进程级冒烟 + 真实模型离线评测（LiveEvalMain） | `src/test/java/**`、`scripts/smoke-test.cmd` |
 
 更多设计与取舍见 `docs/DESIGN.md`，接口细节见 `docs/API.md`，验证步骤见 `docs/VERIFICATION.md`。
 
@@ -409,7 +412,7 @@ interview-agent/
 │   ├── application.properties  配置
 │   ├── knowledge/knowledge-base.json  八股知识库种子（31 条）
 │   └── static/                 前端（index.html / styles.css / app.js，零依赖）
-└── src/test/java/...           169 项自动化测试 + 评测/冒烟工具
+└── src/test/java/...           186 项自动化测试 + 评测/冒烟工具
 ```
 
 ---

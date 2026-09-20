@@ -148,6 +148,8 @@ public final class Dtos {
             List<String> corrections,
             List<String> suggestedAdditions,
             String referenceAnswerStructure,
+            /** 可复述的示范表达（非标准答案）；为空表示模型没给或被防编造校验丢弃。 */
+            String referenceAnswer,
             List<String> evidenceWarnings,
             boolean followUpRecommended,
             String followUpFocus,
@@ -203,6 +205,14 @@ public final class Dtos {
     }
 
     public record ReportResponse(ReportView report, String markdown) {
+    }
+
+    /**
+     * 重答准备结果。
+     *
+     * @param discardedScore 本次作废的旧分数（此前没有评分时为 null），前端据此提示用户
+     */
+    public record RetryView(QuestionView question, SessionView session, Double discardedScore) {
     }
 
     // ---------------------------------------------------------------- 系统状态

@@ -114,6 +114,16 @@ public class InterviewService {
                                String nextActionHint) {
     }
 
+    /**
+     * 重答准备结果：把「可以重新回答了」这件事和剩余信息一起返回给前端。
+     *
+     * @param question       需要重答的题目（原题，不变）
+     * @param session        更新后的会话（状态回到 WAITING_ANSWER）
+     * @param discardedScore 被丢弃的旧分数（前端提示用：让用户知道旧成绩已作废）
+     */
+    public record RetryView(InterviewQuestion question, InterviewSession session, Double discardedScore) {
+    }
+
     // ---------------------------------------------------------------- 会话生命周期
 
     public InterviewSession createSession(String resumeId, InterviewMode mode) {
@@ -373,7 +383,8 @@ public class InterviewService {
         evaluation = new AnswerEvaluation(evaluation.id(), answer.id(), question.id(), session.id(),
                 evaluation.totalScore(), evaluation.dimensionScores(), evaluation.strengths(),
                 evaluation.missingPoints(), evaluation.corrections(), evaluation.suggestedAdditions(),
-                evaluation.referenceAnswerStructure(), evaluation.evidenceWarnings(),
+                evaluation.referenceAnswerStructure(), evaluation.referenceAnswer(),
+                evaluation.evidenceWarnings(),
                 evaluation.followUpRecommended(), evaluation.followUpFocus(), evaluation.summary(),
                 evaluation.degraded(), evaluation.rawModelOutput(), evaluation.createdAt());
         repository.saveEvaluation(evaluation);
@@ -415,6 +426,113 @@ public class InterviewService {
             hint = "可以进入下一题，或先结束面试查看报告。";
         }
         return new AnswerResult(answer, evaluation, updated, nextAction, hint);
+    }
+
+    // ---------------------------------------------------------------- 重答与换题
+
+    /**
+     * 准备重答当前题（方案书场景一「重新回答」）。
+     *
+     * <p>语义是「旧成绩作废、本题重来」：删掉旧回答与旧评分，会话状态回到
+     * {@code WAITING_ANSWER}。删除而不是保留两份，是为了让报告统计口径保持唯一——
+     * 否则同一道题会被算两次，平均分和能力雷达都会被污染。
+     *
+     * @return 需要重答的题目与新会话状态
+     */
+    public RetryView retryAnswer(String sessionId) {
+        InterviewSession session = requireSession(sessionId);
+        InterviewStateMachine.requireRetryAnswer(session.status());
+        if (session.currentQuestionId() == null) {
+            throw new InvalidSessionStateException("当前没有可重答的题目，请先获取题目。");
+        }
+        InterviewRepository.SessionDetail detail = repository.detail(sessionId)
+                .orElseThrow(() -> new NotFoundException("面试会话", sessionId));
+        InterviewQuestion question = detail.question(session.currentQuestionId())
+                .orElseThrow(() -> new InvalidSessionStateException("当前题目不存在，请重新获取题目。"));
+        InterviewAnswer answer = detail.answerOf(question.id())
+                .orElseThrow(() -> new InvalidSessionStateException("这道题还没有提交过回答，直接提交即可。"));
+
+        Double discardedScore = null;
+        for (AnswerEvaluation evaluation : detail.evaluationsOfAnswer(answer.id())) {
+            discardedScore = evaluation.totalScore();
+            repository.deleteEvaluation(evaluation.id());
+        }
+        repository.deleteAnswer(answer.id());
+
+        Instant now = clock.instant();
+        InterviewSession updated = new InterviewSession(
+                session.id(), session.resumeId(), session.mode(), session.stage(), SessionStatus.WAITING_ANSWER,
+                question.id(), null, session.activeProject(),
+                session.questionCount(), Math.max(0, session.answerCount() - 1),
+                session.followUpCount(), session.followUpUsedOnCurrent(),
+                session.maxQuestions(), session.coveredTopics(),
+                withoutFeedbackFor(session.recentFeedback(), question.sequence()),
+                session.askedQuestionDigests(), session.endReason(),
+                session.createdAt(), session.startedAt(), session.endedAt(), now);
+        repository.saveSession(updated);
+        log.info("重答第 {} 题：旧分数 {} 已作废", question.sequence(), discardedScore);
+        return new RetryView(question, updated, discardedScore);
+    }
+
+    /**
+     * 换一道题（方案书场景一「换一道题」）。
+     *
+     * <p>被换掉的题会被删除且**不消耗题量配额**，但它的指纹会留在
+     * {@code askedQuestionDigests} 里，避免模型又出一道一样的。
+     */
+    public QuestionView replaceQuestion(String sessionId) {
+        InterviewSession session = requireSession(sessionId);
+        InterviewStateMachine.requireReplaceQuestion(session.status());
+        if (session.currentQuestionId() == null) {
+            throw new InvalidSessionStateException("当前没有可替换的题目，请先获取题目。");
+        }
+        int used = skipsUsed(session);
+        int limit = properties.interview().resolvedMaxQuestionSkips();
+        if (used >= limit) {
+            throw new InvalidSessionStateException(
+                    "本场已经换过 " + limit + " 次题，不能再换了。可以直接作答，或结束这场重新开始。");
+        }
+
+        InterviewRepository.SessionDetail detail = repository.detail(sessionId)
+                .orElseThrow(() -> new NotFoundException("面试会话", sessionId));
+        InterviewQuestion dropped = detail.question(session.currentQuestionId())
+                .orElseThrow(() -> new InvalidSessionStateException("当前题目不存在，请重新获取题目。"));
+        if (detail.answerOf(dropped.id()).isPresent()) {
+            throw new InvalidSessionStateException("这道题已经回答过了，请先「重新回答」或直接进入下一题。");
+        }
+        // 先删掉被换的题并把题量配额还回去，再复用正常的出题流程（题号、覆盖主题、
+        // 事件顺序都与「下一题」保持一致，避免出现两套出题逻辑）。
+        repository.deleteQuestion(dropped.id());
+        Instant now = clock.instant();
+        InterviewSession rolledBack = new InterviewSession(
+                session.id(), session.resumeId(), session.mode(), session.stage(), SessionStatus.WAITING_ANSWER,
+                null, session.lastAnswerId(), session.activeProject(),
+                Math.max(0, session.questionCount() - 1), session.answerCount(),
+                session.followUpCount(), session.followUpUsedOnCurrent(),
+                session.maxQuestions(), session.coveredTopics(), session.recentFeedback(),
+                session.askedQuestionDigests(), session.endReason(),
+                session.createdAt(), session.startedAt(), session.endedAt(), now);
+        repository.saveSession(rolledBack);
+        log.info("换题：已丢弃第 {} 题（本场第 {} 次换题）", dropped.sequence(), used + 1);
+        return nextQuestion(sessionId);
+    }
+
+    /**
+     * 本场已用掉的换题次数。
+     *
+     * <p>不新增持久化字段，而是用一条不变量推导：每生成一道题都会往
+     * {@code askedQuestionDigests} 追加指纹，同时 {@code questionCount} 加一；
+     * 被换掉的题只减 {@code questionCount} 不删指纹，因此两者之差就是换题次数。
+     * 该不变量由 {@code InterviewFlowTest} 断言，改动出题流程时会被测出来。
+     */
+    private int skipsUsed(InterviewSession session) {
+        return Math.max(0, session.askedQuestionDigests().size() - session.questionCount());
+    }
+
+    /** 去掉某道题的旧反馈条目（重答后不能让上一轮的分数留在 recentFeedback 里）。 */
+    private List<String> withoutFeedbackFor(List<String> feedback, int sequence) {
+        String prefix = "第 " + sequence + " 题 ";
+        return feedback.stream().filter(item -> !item.startsWith(prefix)).toList();
     }
 
     /** 查询最近一次评估（未提交过回答时返回空）。 */

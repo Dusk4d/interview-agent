@@ -247,6 +247,10 @@ public class ReportBuilder {
                     md.append("- 建议补充：").append(String.join("；", evaluation.suggestedAdditions())).append('\n');
                 }
                 md.append("- 参考结构：").append(evaluation.referenceAnswerStructure()).append('\n');
+                if (evaluation.referenceAnswer() != null && !evaluation.referenceAnswer().isBlank()) {
+                    md.append("- 参考回答（示范表达，不是标准答案）：").append('\n')
+                            .append("  > ").append(evaluation.referenceAnswer().replaceAll("\\s+", " ")).append('\n');
+                }
             }
             md.append('\n');
         }

@@ -64,7 +64,7 @@ class InterviewFlowTest {
                         0.3, 800, 500, 1000, 0, false, null, null, null),
                 new AppProperties.Embedding("local", 128, 8),
                 new AppProperties.Retrieval(4, 0.05, 4000, 3),
-                new AppProperties.Interview(6, 1, 8, 4000),
+                new AppProperties.Interview(6, 1, 8, 4000, 3),
                 new AppProperties.Privacy(true, false),
                 new AppProperties.Storage("memory", ""),
                 new AppProperties.Parser(10 * 1024 * 1024));

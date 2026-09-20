@@ -296,6 +296,27 @@ public class InterviewController {
         return ApiMapper.toView(view.question(), view.degraded(), view.degradationReason());
     }
 
+    /**
+     * 重新回答当前题（方案书场景一「重新回答」）。
+     *
+     * <p>旧回答与旧评分会被作废，状态回到「等待回答」，前端据此重新打开答题框。
+     */
+    @PostMapping("/interviews/{id}/retry")
+    public Dtos.RetryView retry(@PathVariable String id) {
+        InterviewService.RetryView view = interviewService.retryAnswer(id);
+        return new Dtos.RetryView(
+                ApiMapper.toView(view.question(), false, null),
+                ApiMapper.toView(view.session(), InterviewStateMachine.describe(view.session().status())),
+                view.discardedScore());
+    }
+
+    /** 换一道题（方案书场景一「换一道题」）：被换掉的题不计入题量与报告。 */
+    @PostMapping("/interviews/{id}/replace-question")
+    public Dtos.QuestionView replaceQuestion(@PathVariable String id) {
+        InterviewService.QuestionView view = interviewService.replaceQuestion(id);
+        return ApiMapper.toView(view.question(), view.degraded(), view.degradationReason());
+    }
+
     /** 结束面试。 */
     @PostMapping("/interviews/{id}/finish")
     public Dtos.SessionView finish(@PathVariable String id,

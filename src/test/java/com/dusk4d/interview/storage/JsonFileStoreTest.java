@@ -108,7 +108,8 @@ class JsonFileStoreTest {
                 Map.of("technical_correctness",
                         new DimensionScore("technical_correctness", "技术正确性", 4.0, 0.25, "提到了机制")),
                 List.of("给出了具体实现"), List.of("缺少量化结果"), List.of(), List.of("补充边界条件"),
-                "背景 → 职责 → 机制 → 结果", List.of(), true, "追问边界", "总体可用", false, null,
+                "背景 → 职责 → 机制 → 结果", "我负责文档解析与检索链路，背景是本项目的简历导入。",
+                List.of(), true, "追问边界", "总体可用", false, null,
                 now.plusSeconds(31));
 
         store(dir, "sessions.json", InterviewSession.class, InterviewSession::id,

@@ -154,7 +154,7 @@ class HeuristicEvaluatorTest {
                     new DimensionScore("technical_correctness", "技术正确性", total, 0.25, "reason"));
         }
         return new AnswerEvaluation("eval-" + questionId, "answer-" + questionId, questionId, "session-1",
-                total, dimensions, List.of(), missing, corrections, List.of(), "结构", List.of(), false,
+                total, dimensions, List.of(), missing, corrections, List.of(), "结构", "", List.of(), false,
                 "focus", "summary", false, null, Instant.now());
     }
 }
