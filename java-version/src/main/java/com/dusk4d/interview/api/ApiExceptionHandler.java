@@ -13,6 +13,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -88,13 +89,70 @@ public class ApiExceptionHandler {
                         clock.instant(), List.of()));
     }
 
-    /** 兜底：记录堆栈但不把内部信息返回给用户。 */
+    /**
+     * 兜底：记录堆栈但不把内部信息返回给用户。
+     *
+     * <p>这里踩过两个坑，都是实测日志里发现的（一次浏览器刷新就在日志里刷两段堆栈）：
+     * <ol>
+     *   <li><b>客户端主动断开</b>（关标签页、刷新、跳转）会以 {@code ClientAbortException} 抛到这里。
+     *       它不是服务端错误，按 ERROR 记录只会把真正的故障淹没在噪音里；</li>
+     *   <li><b>非 /api 请求</b>（静态资源、SPA 页面）的响应 Content-Type 已经确定为 {@code text/html}，
+     *       此时再返回 {@code ErrorResponse} 会二次抛 {@code HttpMessageNotWritableException}
+     *       （"No converter for [Dtos$ErrorResponse] with preset Content-Type 'text/html'"），
+     *       于是同一个请求打出两段堆栈。</li>
+     * </ol>
+     */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Dtos.ErrorResponse> handleUnexpected(Exception e, HttpServletRequest request) {
+    public ResponseEntity<Dtos.ErrorResponse> handleUnexpected(Exception e, HttpServletRequest request,
+                                                               HttpServletResponse response) {
+        if (isClientDisconnect(e)) {
+            log.debug("客户端提前断开连接：{}（浏览器关闭或跳转，非服务端错误）", request.getRequestURI());
+            return null;
+        }
+        if (!isApiRequest(request)) {
+            // 浏览器要的是 HTML/静态资源，JSON 错误体既写不出去也没有意义；
+            // 这里只保证状态码是 500 并留日志，正文交给容器处理。
+            log.error("静态资源请求处理失败：{}", request.getRequestURI(), e);
+            if (!response.isCommitted()) {
+                response.setStatus(HttpStatus.INTERNAL_SERVER_ERROR.value());
+            }
+            return null;
+        }
         log.error("未预期异常：{}", request.getRequestURI(), e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new Dtos.ErrorResponse("INTERNAL_ERROR",
                         "服务内部错误，请稍后重试。如果持续出现，请查看服务端日志。",
                         request.getRequestURI(), Instant.now(), List.of()));
+    }
+
+    /**
+     * 是否为「客户端断开连接」导致的异常。
+     *
+     * <p>按类名判断而不是直接 import Tomcat 的 {@code ClientAbortException}：
+     * 异常处理层不应该绑死在某个 Servlet 容器实现上，换容器后同名的断开异常仍能被识别。
+     * 顺带识别 "Broken pipe" / "Connection reset"，它们在 JDK 底层会以普通 IOException 冒出来。
+     */
+    private boolean isClientDisconnect(Throwable e) {
+        Throwable current = e;
+        // 上限保护：cause 链理论上可能自引用，而在异常处理器里死循环是最糟的情况。
+        for (int depth = 0; current != null && depth < 10; depth++) {
+            if ("org.apache.catalina.connector.ClientAbortException".equals(current.getClass().getName())) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null
+                    && (message.contains("Broken pipe") || message.contains("Connection reset")
+                        || message.contains("中止了一个已建立的连接"))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    /** 只有 /api/** 才返回结构化 JSON 错误体（其余是页面与静态资源）。 */
+    private boolean isApiRequest(HttpServletRequest request) {
+        String uri = request == null ? null : request.getRequestURI();
+        return uri != null && uri.startsWith("/api/");
     }
 }

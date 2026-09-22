@@ -2,7 +2,7 @@
 
 本文说明「怎么证明系统能用」，以及哪些结论已经实测、哪些仍然待测。
 
-## 一、自动化测试（186 项）
+## 一、自动化测试（192 项）
 
 ```bat
 powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
@@ -40,8 +40,9 @@ powershell -ExecutionPolicy Bypass -File scripts\run-tests.ps1
 | 模型连通性诊断 | `LlmDiagnosticsTest` | 6 | 地址可达+模型名匹配才算可用；模型名不存在要点名并给出该改成什么；服务端不返回模型列表时不误判；地址不通要说明探测了哪里、本机该查哪些端口（用真实本地 HTTP 假服务验证） |
 | 参考回答与防编造 | `ReferenceAnswerTest` | 6 | 指标有出处才保留；编造指标整段丢弃并说明原因；简历事实里的数字允许复用；序数词不误杀；模型不给时字段为空；降级评估不给参考回答 |
 | 重答与换题 | `RetryAndReplaceTest` | 11 | 重答后旧答案/旧评分真被删除、报告只算最新一次；未作答或已进入下一题时拒绝重答；换题不占配额且新题不重复、被换的题不留仓储；换题上限；状态机守卫；换题次数不变量 |
+| 兜底异常处理 | `ApiExceptionHandlerTest` | 6 | 客户端断连（含 cause 链里的、以及 Broken pipe 这类）不写错误体、不按服务端错误记录；非 `/api` 请求只置 500 不写 JSON（避免 `text/html` 转换二次异常）；响应已提交时不再改状态码；`/api` 仍返回结构化 500 |
 
-合计 **186 次测试执行，全部通过**。
+合计 **192 次测试执行，全部通过**。
 
 ### 验收标准对照（`MvpAcceptanceTest`）
 
@@ -385,6 +386,41 @@ POST /replace-question
   「我的回答」与「参考回答（示范表达，不是标准答案）」；
 * 单题练习页新增「重新回答」「换一道题」两个按钮，重答会把上次的回答填回输入框方便修改；
 * 冒烟脚本新增 10 项断言覆盖上述行为（26 → 36 项），mock 与真实模型实例均全部通过。
+
+### 6.12 日志噪音：一次浏览器刷新打出两段堆栈（阅读运行日志时发现）
+
+在真实运行日志里发现，用户点一次浏览器刷新（或关标签页）就会产生两段堆栈：
+
+```text
+ERROR c.d.i.api.ApiExceptionHandler - 未预期异常：/index.html
+  org.apache.catalina.connector.ClientAbortException: java.io.IOException: 你的主机中的软件中止了一个已建立的连接。
+WARN  o.s.w.s.m.m.a.ExceptionHandlerExceptionResolver - Failure in @ExceptionHandler ...#handleUnexpected
+  org.springframework.http.converter.HttpMessageNotWritableException:
+  No converter for [class com.dusk4d.interview.api.Dtos$ErrorResponse] with preset Content-Type 'text/html'
+```
+
+两个独立原因：
+
+1. **客户端主动断开**（关标签页、刷新、跳转）会以 `ClientAbortException` 抛到兜底处理器。
+   它不是服务端错误，用 ERROR + 完整堆栈记录，会把真正的故障淹没在噪音里。
+2. **非 `/api` 请求**（静态资源、SPA 页面）的响应 Content-Type 已经确定为 `text/html`，
+   此时返回 `ErrorResponse` 必然二次抛 `HttpMessageNotWritableException`——同一个请求打两段堆栈。
+
+修复（`ApiExceptionHandler.handleUnexpected`）：
+* 识别断连（按类名判断 `ClientAbortException`，不直接依赖 Tomcat 类型；并识别 cause 链与
+  `Broken pipe` / `Connection reset` 这类底层写法，带 10 层上限防止 cause 自引用死循环）→ 降为 DEBUG、不写正文；
+* 非 `/api` 请求只把状态码置为 500 并记日志，不尝试写 JSON 正文；响应已提交时不再改状态码；
+* `/api` 请求的 500 JSON 契约保持不变。
+
+实测证明（真实进程，非仅单测）：以 `-Dlogging.level.com.dusk4d.interview.api=DEBUG` 启动后，
+用 TCP RST 强制中断 5 次 `/app.js` 请求，日志只出现
+
+```text
+DEBUG c.d.i.api.ApiExceptionHandler - 客户端提前断开连接：/app.js（浏览器关闭或跳转，非服务端错误）
+```
+
+**零 ERROR、零 `No converter` 警告**（修复前这 5 次会产生 10 段堆栈）。
+确定性覆盖见 `ApiExceptionHandlerTest`（6 项）。自动化测试 186 → 192 项，进程级冒烟 36/36 通过。
 
 ## 七、待测指标（**不要写进简历当作结论**）
 

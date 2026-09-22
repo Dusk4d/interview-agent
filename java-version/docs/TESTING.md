@@ -214,7 +214,7 @@ curl "http://127.0.0.1:8090/api/interviews/<sessionId>/report.md"
 如果你想先确认「环境本身没问题」，再开始点界面：
 
 ```bat
-powershell -File scripts\run-tests.ps1        :: 186 项自动化测试（离线，不需要模型）
+powershell -File scripts\run-tests.ps1        :: 192 项自动化测试（离线，不需要模型）
 
 :: 另开一个窗口，先起服务，再对「正在运行的实例」做 36 项 HTTP 冒烟
 scripts\start.cmd mock
