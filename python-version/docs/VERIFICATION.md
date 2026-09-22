@@ -1,23 +1,39 @@
 # Python 版验证记录
 
-更新时间：2026-09-21（Asia/Shanghai）
+更新时间：2026-09-22（Asia/Shanghai）
 
 ## 当前可复现结论
 
+下表为**独立复验**结果（由 Java 版维护者在本机重新执行，不是照抄先前结论）。
+标注「复验」的行是本次重新测量后修正过的数字。
+
 | 验证层级 | 命令/方法 | 当前结果 |
 |---|---|---|
-| Python 自动化测试 | `.venv\Scripts\python.exe -m pytest -q` | 75 项通过，2 个第三方弃用告警 |
+| Python 自动化测试 | `.venv\Scripts\python.exe -m pytest -q` | **76 项通过**，2 个第三方弃用告警（复验修正：此前记为 75 项） |
 | 静态检查 | `.venv\Scripts\python.exe -m ruff check --no-cache python scripts` | 全部通过 |
 | 依赖一致性 | `.venv\Scripts\python.exe -m pip check` | 无损坏或冲突依赖 |
-| Wheel 打包与隔离安装 | `pip wheel` 后安装到临时目标目录，再加载健康检查与首页 | 包内知识库、静态页面和命令入口可独立使用；测试目录未进入 wheel |
-| 多轮稳定性 | 同一套 75 项测试连续执行 5 轮 | 5/5 轮通过，共 375 次用例执行 |
-| Mock 进程冒烟 | 启动独立 Uvicorn 进程后运行 `scripts\smoke_test.py` | 33/33 检查通过 |
-| 真实浏览器端到端 | Chrome 153 无头模式 + `scripts\browser_smoke.mjs` | 示例简历、项目题、50 字回答、评分、报告与 Markdown 渲染通过；无页面异常、错误 toast 或失败网络请求 |
-| 真实模型闭环 | Ollama `qwen3:1.7b`，真实 HTTP 出题、评分、报告 | 出题和四维评分均 `degraded=false`，报告成功 |
-| 真实模型进程冒烟 | 对 Ollama 模式运行完整 smoke 脚本 | 26/26 检查通过 |
-| 跨进程恢复 | 文件模式首进程完成全流程，第二进程读取同一数据目录 | 简历、会话、34 个索引片段、检索与报告全部恢复 |
-| Docker 配置 | `docker compose config` | 通过 |
+| Mock 进程冒烟 | 独立 Uvicorn 进程 + `scripts\smoke_test.py` | **33/33 检查通过** |
+| 真实模型进程冒烟 | Ollama `qwen3:1.7b` + `scripts\smoke_test.py` | **33/33 检查通过**（复验修正：此前记为 26/26，与 mock 模式一样是 33 项） |
+| 真实模型闭环 | Ollama `qwen3:1.7b`，真实 HTTP 出题、评分、报告 | 出题 9.8s `degraded=false` 且引用回指简历项目；同一回答连续 3 次评分 4.25/4.25/4.25（σ=0.000），4 维齐全、`degraded=false` |
+| 跨进程恢复 | 文件模式首进程完成全流程，第二进程读取同一数据目录 | 2 份简历、2 个会话、2 份报告全部恢复；报告分数与 `answerCount` 一致，Markdown「逐题明细」完整；检索索引重建出 2 个片段 |
+| 模型不可达降级 | 指向 `http://127.0.0.1:9/v1` 后走完整流程 | 出题与评分均 HTTP 200、`degraded=true`、各 2.6s；四维齐全、分数 1.2（≤3.5 降级上限）；`llmStatus` 自动发现 11434 的 Ollama 并给出应设变量 |
+| 并发重复提交 | 6 个线程同时提交同一题同一回答 | 恰好 1×200、5×409，会话 `answerCount=1` |
+| Java ↔ Python 响应契约 | 同一流程分别打 Java(8094) 与 Python(8093)，逐字段递归比对 | **Java 字段无缺失**；Python 为超集（多 `health.embeddingStatus`/`retrievalTopK`/`retrievalMinScore`、`facts[].resumeId`） |
+| 换题上限 | 连续调用 `replace-question` 不中途作答 | 两边一致：均 3 次后 409 |
+| 多轮稳定性 | 同一套测试连续执行 5 轮 | 5/5 轮通过（此前记录，本次未重复执行） |
+| Wheel 打包与隔离安装 | `pip wheel` 后安装到临时目标目录 | 此前记录通过，本次未重复执行 |
+| 真实浏览器端到端 | Chrome 无头 + `scripts\browser_smoke.mjs` | 此前记录通过，本次未重复执行 |
+| Docker 配置 | `docker compose config` | 此前记录通过 |
 | Docker 镜像运行 | `docker compose up --build` | 未验证：本机 Docker Engine 未启动 |
+
+## 与 Java 版的行为差异（复验新发现，此前未记录）
+
+| 场景 | Java | Python | 说明 |
+|---|---|---|---|
+| 当前题**尚未作答**时再次请求 `next-question` | 200：下发新题，`questionCount` +1，旧题留在仓储，报告里显示「（未作答）」 | 409 `INVALID_SESSION_STATE`：「当前问题尚未回答；请先回答、换题或结束面试。」 | **唯一的语义分歧**。Python 更严格，也更符合产品意图（避免静默跳题、避免未作答题污染报告统计）；Java 放行只是因为状态机允许 `WAITING_ANSWER → 下一题`，而 Java 前端并不会启用该按钮。两者都需用直接调 API 才能触发 |
+
+除此之外，重答（旧成绩作废、`answerCount` 归零、旧评分 404）、换题（不占题量配额、题号不前进）、
+追问、报告统计口径、错误码契约（400/404/405/409）在两边行为一致。
 
 ## 已由测试锁定的高风险行为
 
@@ -42,4 +58,4 @@
 
 - Docker 镜像真实构建、容器健康检查与卷持久化（需要 Docker Engine）。
 - 7B/14B 模型对照与真实用户完成率；这些本来就不是 MVP 的代码完成条件。
-- 原 Java 186 项测试尚未逐条机械翻译；当前采用需求行为等价测试，完成审计仍需继续扩大覆盖矩阵。
+- 原 Java 192 项测试尚未逐条机械翻译；当前采用需求行为等价测试，完成审计仍需继续扩大覆盖矩阵。

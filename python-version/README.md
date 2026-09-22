@@ -99,11 +99,11 @@ docker compose up --build
 Compose 使用名为 `interview-data` 的 Docker volume 保存 JSON 数据，重建容器不会清空数据。
 
 当前测试范围与尚未验证项见 [`docs/VERIFICATION.md`](docs/VERIFICATION.md)，Java/Python 行为映射见
-[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)。不要用较少的 Python 用例数量直接替代 Java 版 186 项测试结论。
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)。不要用较少的 Python 用例数量直接替代 Java 版 192 项测试结论。
 
 ## 与 Java 版的差异
 
 - Python 版使用 FastAPI/Pydantic，而非 Spring Boot/Java record。
 - Python 版 PDF 解析使用 pypdf，DOCX 使用 python-docx。
 - 启发式评分有意限制在 3.5 分以内并标记 `degraded=true`；真实模型成功返回结构化评分后才解除降级标记。
-- 目前迁移的是产品行为与 API，不追求 Java 类的一对一翻译。原 Java 的 186 项测试不能直接运行在 Python 上，Python 版有独立测试套件。
+- 目前迁移的是产品行为与 API，不追求 Java 类的一对一翻译。原 Java 的 192 项测试不能直接运行在 Python 上，Python 版有独立测试套件。
