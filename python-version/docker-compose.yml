@@ -1,0 +1,19 @@
+services:
+  interview-agent-python:
+    build: .
+    ports:
+      - "8090:8090"
+    environment:
+      INTERVIEW_LLM_PROVIDER: ${INTERVIEW_LLM_PROVIDER:-mock}
+      INTERVIEW_LLM_BASE_URL: ${INTERVIEW_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      INTERVIEW_LLM_CHAT_MODEL: ${INTERVIEW_LLM_CHAT_MODEL:-qwen3:1.7b}
+      INTERVIEW_STORAGE_MODE: file
+    volumes:
+      - interview-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    init: true
+
+volumes:
+  interview-data:

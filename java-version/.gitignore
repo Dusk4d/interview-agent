@@ -1,0 +1,41 @@
+# 构建产物
+target/
+dist/
+data/
+logs/
+*.log
+
+# 离线依赖镜像（408MB，按需用 scripts/build-dist.ps1 重新生成）
+# 如需在其他机器上离线构建，可自行执行：
+#   robocopy %USERPROFILE%\.m2\repository .m2repo /E
+.m2repo/
+.m2settings.xml
+mvn-offline.cmd
+
+# IDE 与编辑器
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+*.tmp
+*.bak
+*.corrupt
+
+# 外部工具产物（不属于本项目）
+# 说明：本机有另一个「秋招投递记录表格优化」任务把中间产物放在了这个目录下，
+# 它们与面试陪练系统无关，这里显式忽略，避免 git add -A 时被误提交。
+node_modules/
+package.json
+package-lock.json
+outputs/
+.spreadsheet_inspection/
+*.mjs
+*.xlsx
+*.ndjson
